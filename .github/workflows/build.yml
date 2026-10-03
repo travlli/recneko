@@ -44,6 +44,8 @@ jobs:
           sudo apt-get install -y python3-tk
 
       - name: 生成知识库 kb.json
+        env:
+          PYTHONIOENCODING: utf-8
         run: python tools/build_kb.py
 
       - name: 生成图片参考库（合成参考图 + 特征提取）
@@ -64,6 +66,8 @@ jobs:
         run: python tools/benchmark_recognition.py
 
       - name: 校验打包入口点（防止相对导入导致的启动崩溃）
+        env:
+          PYTHONIOENCODING: utf-8
         run: python tools/verify_entrypoints.py
 
       - name: 上传数据文件（供后续 job 复用）
@@ -239,3 +243,71 @@ jobs:
           name: MiRecoveryHelper-windows-msi
           path: dist/*.msi
           if-no-files-found: warn
+
+  # ------------------------------------- 打 tag 时发布 Release + exe 附件
+  # 只有推 v* tag 才跑；普通 push 到 main 时该作业直接跳过。
+  # Windows EXE 作业只把 exe 当 artifact 上传（artifact 会过期），
+  # 这里把它作为 Release 附件固定下来，用户从 Releases 页下载。
+  publish-release:
+    name: 发布 Release（打 tag 时）
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install "toga>=0.4.0" pillow numpy pyinstaller
+
+      - name: 生成知识库 + 图标 + 图片参考库
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python tools/build_kb.py
+          python tools/make_icon.py
+          python tools/make_reference_images.py --clean
+          python tools/build_references.py
+
+      - name: 冒烟测试打包后的自检 exe（发布前门禁）
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --distpath dist --workpath build/selftest MiRecoveryHelper.selftest.spec
+          & dist/MiRecoveryHelperSelfTest.exe
+          if ($LASTEXITCODE -ne 0) { throw "冻结自检失败：exe 内知识库不可用，已中止发布" }
+
+      - name: 构建单文件 exe
+        run: pyinstaller --noconfirm MiRecoveryHelper.spec
+
+      - name: 确认 exe 存在
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/MiRecoveryHelper.exe)) {
+            throw "dist/MiRecoveryHelper.exe 未生成"
+          }
+          Get-FileHash dist/MiRecoveryHelper.exe -Algorithm SHA256
+
+      - name: 发布 Release 并挂上 exe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          # 该 tag 已存在 Release（例如先手动建过）就补传附件，否则新建。
+          if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
+            gh release upload $tag dist/MiRecoveryHelper.exe --clobber --repo "${{ github.repository }}"
+          } else {
+            gh release create $tag dist/MiRecoveryHelper.exe `
+              --repo "${{ github.repository }}" `
+              --title "$tag — RecNeko /rec检查喵/" `
+              --generate-notes
+          }
+          "发布完成：https://github.com/${{ github.repository }}/releases/tag/$tag"
