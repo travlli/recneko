@@ -224,6 +224,10 @@ jobs:
           python tools/make_icon.py
 
       - name: 构建并打包 MSI
+        env:
+          # briefcase 自身要打印含中文的描述/进度，Windows runner 的 stdout
+          # 默认是 cp1252，会抛 UnicodeEncodeError: 'charmap'。
+          PYTHONIOENCODING: utf-8
         run: |
           briefcase create windows
           briefcase build windows
