@@ -43,9 +43,16 @@ icon = "src/mirecovery/resources/icon"
 
 # ---------------------------------------------------------------- Windows
 [tool.briefcase.app.mirecovery.windows]
+formal_name = "Rec检查喵"
 requires = ["toga-winforms>=0.4.0"]
 # briefcase package windows 产出 .msi（需要 Visual Studio Build Tools）。
 # 免安装单文件 exe 请用 PyInstaller：pyinstaller --noconfirm MiRecoveryHelper.spec
+#
+# formal_name 必须在这里覆盖成不带斜杠的版本：briefcase 用它拼可执行文件名，
+# 而 app 级的 "/rec检查喵/" 会被当成路径分隔符，于是得到 'D:\rec检查喵\.exe'
+# 并抛出 ValueError: ... is not in the subpath of ...（同样会炸掉
+# briefcase create windows 的 stub 安装步骤）。界面标题仍用
+# mirecovery.theme.APP_DISPLAY_NAME 的装饰版本，不受影响。
 
 # ---------------------------------------------------------------- Android
 [tool.briefcase.app.mirecovery.android]
