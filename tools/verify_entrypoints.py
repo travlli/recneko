@@ -17,9 +17,11 @@ This script reproduces PyInstaller's real execution mode with runpy.
 
 from __future__ import annotations
 
+import importlib
 import runpy
 import sys
 import traceback
+import types
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,8 +37,6 @@ APP_MODULE = "mirecovery.app"
 
 def check_modules_import() -> list[str]:
     """Every module the app is built from must import cleanly."""
-    import importlib
-
     modules = (
         "mirecovery",
         "mirecovery.app",
@@ -55,6 +55,77 @@ def check_modules_import() -> list[str]:
             problems.append(f"import {name} 失败: {type(exc).__name__}: {exc}")
     print(f"包导入  : 已检查 {len(modules)} 个模块")
     return problems
+
+
+TOGA_STUBBED = False
+
+
+def _install_toga_stub() -> None:
+    """Provide a minimal ``toga`` so ``mirecovery.app`` imports anywhere.
+
+    This script only reproduces PyInstaller's execution *context*: a module run
+    as ``__main__`` with no parent package. It never builds a window, so the
+    real GUI toolkit is irrelevant here - and requiring it makes the check fail
+    for the wrong reason on runners where Toga cannot work at all (``toga``
+    needs GTK plus ``toga-gtk`` on Linux, and its Windows backend needs an
+    x86/x64 pythonnet runtime).
+
+    The stub is installed only when the real package is absent, so a machine
+    that does have Toga still validates against the genuine module.
+    """
+    global TOGA_STUBBED
+    try:
+        importlib.import_module("toga")
+    except ImportError:
+        pass
+    else:
+        return
+
+    def _permissive(name: str) -> types.ModuleType:
+        """A module that accepts any attribute access, for import-time symbols."""
+        module = types.ModuleType(name)
+        module.__path__ = []  # type: ignore[attr-defined]
+        module.__getattr__ = lambda attr, _n=name: type(attr, (), {})  # type: ignore[attr-defined]
+        return module
+
+    class _Pack:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    toga = types.ModuleType("toga")
+    toga.__path__ = []  # type: ignore[attr-defined]
+    for attr in (
+        "App",
+        "Box",
+        "Button",
+        "Image",
+        "ImageView",
+        "InfoDialog",
+        "Label",
+        "MainWindow",
+        "MultilineTextInput",
+        "OpenFileDialog",
+        "Widget",
+    ):
+        setattr(toga, attr, type(attr, (), {}))
+
+    constants = types.ModuleType("toga.constants")
+    constants.COLUMN = "column"
+    constants.ROW = "row"
+    constants.Size = type("Size", (), {})
+
+    style = types.ModuleType("toga.style")
+    style.Pack = _Pack
+
+    toga.constants = constants  # type: ignore[attr-defined]
+    toga.style = style  # type: ignore[attr-defined]
+    toga.platform = _permissive("toga.platform")
+
+    sys.modules["toga"] = toga
+    sys.modules["toga.constants"] = constants
+    sys.modules["toga.style"] = style
+    sys.modules["toga.platform"] = toga.platform
+    TOGA_STUBBED = True
 
 
 def check_entry_point() -> list[str]:
@@ -82,8 +153,18 @@ def check_entry_point() -> list[str]:
             )
 
     # 2. Exec it in __main__ context with both GUIs stubbed out.
-    import mirecovery.app as toga_module
-    import mirecovery.tkapp as tk_module
+    _install_toga_stub()
+    try:
+        toga_module = importlib.import_module("mirecovery.app")
+        tk_module = importlib.import_module("mirecovery.tkapp")
+    except Exception as exc:
+        if TOGA_STUBBED:
+            print("toga    : 未安装，已用占位实现（仅校验入口点执行上下文）")
+        return problems + [
+            f"导入界面模块失败（打包后会启动即崩溃）: {type(exc).__name__}: {exc}"
+        ]
+    if TOGA_STUBBED:
+        print("toga    : 未安装，已用占位实现（仅校验入口点执行上下文）")
 
     reached = {"toga": False, "tk": False}
     original_toga = toga_module.run
@@ -130,6 +211,9 @@ def check_entry_point() -> list[str]:
 
 def main() -> int:
     print(f"Python  : {sys.version.split()[0]}\n")
+
+    # Both checks import mirecovery.app, which imports toga at module level.
+    _install_toga_stub()
 
     problems: list[str] = []
     problems += check_modules_import()

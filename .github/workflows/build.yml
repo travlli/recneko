@@ -35,6 +35,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow numpy
 
+      # 校验打包入口点需要 tkinter（tkapp 备选界面，仅用标准库）。
+      # toga 无需安装：打包入口点校验只复现 PyInstaller 的执行上下文，
+      # 不构建窗口，脚本会在缺少 toga 时使用占位实现。
+      - name: 安装 tkinter（Ubuntu 下不在标准库中）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
       - name: 生成知识库 kb.json
         run: python tools/build_kb.py
 
@@ -95,6 +103,12 @@ jobs:
 
       - name: 用 PyInstaller 打单文件 exe
         run: pyinstaller --noconfirm MiRecoveryHelper.spec
+
+      # 本 job 已装 toga，因此这里跑的是对真实 toga 模块的校验。
+      - name: 校验打包入口点（真实 toga 环境）
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tools/verify_entrypoints.py
 
       - name: 确认 exe 存在
         shell: pwsh
