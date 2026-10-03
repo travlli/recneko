@@ -1,0 +1,3 @@
+include kb/**/*.md
+include tools/*.py
+recursive-include src/mirecovery/data *.json

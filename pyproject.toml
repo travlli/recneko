@@ -1,0 +1,61 @@
+# BeeWare Briefcase 项目配置（exe 安装包 / apk）。
+#
+# 注意：Briefcase 读取的是 [tool.briefcase] 而不是 [briefcase]。
+#
+#   briefcase create android   # 生成 Android 工程
+#   briefcase build android    # 构建
+#   briefcase package android  # 出 apk（需要 JDK 17，SDK/NDK 会自动下载）
+#   briefcase package windows  # 出 MSI（可选；单文件 exe 见 MiRecoveryHelper.spec）
+#
+# 许可字段必须是 app 级（合并后校验）：license 为 SPDX 表达式，
+# license-files 指向许可文件。
+
+[tool.briefcase]
+project_name = "RecNeko"
+bundle = "com.dsh"
+version = "2.0.0"
+url = "https://github.com/travlli/recneko"
+author = "travlli"
+author_email = "travlli@users.noreply.github.com"
+
+[tool.briefcase.app.mirecovery]
+formal_name = "/rec检查喵/"
+description = "小米/红米刷机报错检查助手：日志检索 + 截图识别，内置离线知识库（MTK / 高通 / fastboot / recovery / AVB）"
+long_description = """
+/rec检查喵/ —— 小米 / 红米刷机报错检查助手。
+
+把设备报错日志粘进来（SP Flash Tool、MiFlash、QFIL、fastboot、recovery
+的输出都可以），或者直接丢一张报错截图，应用会自动判定平台与当前模式，
+并从内置知识库里检索出最匹配的排查步骤与验证方法。
+
+知识库覆盖：MediaTek BROM/DA 报错、高通 Sahara/Firehose/EDL、
+fastboot 解锁与刷写失败、recovery 挂载失败、AVB/dm-verity 校验失败。
+
+界面为二次元风，内置吉祥物「大肥鱼喵」。完全离线运行，不上传任何内容。
+"""
+license = "MIT"
+license-files = ["LICENSE"]
+sources = ["src/mirecovery"]
+# Pillow 用于图片识别；numpy 在 Chaquopy（Android）支持列表内，装了会走向量化的
+# ZNCC 快路径，缺失时自动回退到等价的纯 Python 实现（因此不是硬依赖）。
+requires = ["toga>=0.4.0", "pillow>=10.0.0", "numpy"]
+icon = "src/mirecovery/resources/icon"
+
+# ---------------------------------------------------------------- Windows
+[tool.briefcase.app.mirecovery.windows]
+requires = ["toga-winforms>=0.4.0"]
+# briefcase package windows 产出 .msi（需要 Visual Studio Build Tools）。
+# 免安装单文件 exe 请用 PyInstaller：pyinstaller --noconfirm MiRecoveryHelper.spec
+
+# ---------------------------------------------------------------- Android
+[tool.briefcase.app.mirecovery.android]
+requires = ["toga-android>=0.4.0"]
+# 构建 APK 需要 JDK 17；Android SDK/NDK 由 briefcase 自动下载。
+
+# ---------------------------------------------------------------- macOS
+[tool.briefcase.app.mirecovery.macOS]
+requires = ["toga-cocoa>=0.4.0"]
+
+# ---------------------------------------------------------------- Linux
+[tool.briefcase.app.mirecovery.linux]
+requires = ["toga-gtk>=0.4.0"]

@@ -1,0 +1,529 @@
+{
+  "version": "2026-10-03",
+  "generated_from": "kb",
+  "count": 18,
+  "entries": [
+    {
+      "slug": "avb-verified-boot-corruption",
+      "title": "AVB / verified boot 报错：dm-verity corruption / Your device is corrupt / vbmeta verification failed",
+      "platform": "avb",
+      "category": "howtos",
+      "tags": [
+        "fastboot",
+        "recovery",
+        "xiaomi",
+        "avb",
+        "vbmeta",
+        "verified-boot"
+      ],
+      "keywords": [
+        "dm-verity corruption",
+        "Your device is corrupt",
+        "vbmeta verification failed",
+        "AVB",
+        "disable-verity",
+        "无法开机",
+        "进不去系统"
+      ],
+      "symptom": "开机时出现完整性校验警告：\n\n```\ndm-verity corruption\nYour device is corrupt. It can't be trusted and may not work properly.\n```\n\n```\nAVB: vbmeta verification failed\n```\n\n其他常见伴随现象：\n\n- bootloader 界面出现红字 / 黄字警告，需要按键才能继续，或者继续后卡住 / 自动重启。\n- 刷入修改过的 boot、system 等分区（root、GSI、第三方内核）之后开始出现，之前正常。\n- 刷过 `vbmeta` 后 `dm-verity corruption` 不再出现，但仍然无法进入系统。\n- 已解锁设备日常也可能显示「设备已解锁」一类警告，这是解锁提示，与 `Your device is corrupt` 这类完整性校验失败不是同一回事。",
+      "cause": "- **改了受 AVB 保护的分区，但 vbmeta 里的校验信息没同步更新**：AVB 会用 vbmeta（及其关联的 vbmeta_system 等，视机型而定）中的哈希 / 描述符校验各分区，任何改动都会让校验失败，于是报 `vbmeta verification failed` / `dm-verity corruption` / `Your device is corrupt`。\n- **镜像与机型 / 版本不匹配**：刷了别机型或不同版本的 vbmeta、boot 等镜像，描述符与分区内容对不上，同样校验失败。\n- **verity / verification 标志与实际分区状态不一致**：只刷了带 `--disable-verity` 的 vbmeta，却没有刷对应的其它分区镜像（或反过来），状态组合矛盾时就可能仍无法启动。\n- **解锁后刷了非官方固件**：这类警告本身属于预期现象；若伴随无法开机，问题在于镜像不匹配或数据分区需要清理，而不是警告文字本身。",
+      "steps": "1. **确认已解锁**（未解锁无法刷 vbmeta）：\n\n   ```\n   fastboot getvar unlocked\n   ```\n\n   返回 `unlocked: yes` 再继续；不是 `yes` 先看 [[fastboot-unlock-token-verify-failed]]。\n\n2. **确认在正确的 fastboot 环境**：vbmeta 属于物理分区，应在 bootloader fastboot（音量下 + 电源进入）下刷，不要在 fastbootd 里刷。用下面命令区分当前环境：\n\n   ```\n   fastboot getvar is-userspace\n   ```\n\n   `yes` 表示极可能是 fastbootd，需要回到 bootloader fastboot 再操作；识别与驱动问题见 [[fastboot-devices-not-detected]]。\n\n3. **取官方镜像**：从本机对应版本的官方 fastboot 完整包里取 `vbmeta.img`。A/B 机型是否另有独立的 `vbmeta_system.img` 等，视机型而定（见 待确认），有就一并处理。\n\n4. **按正确参数顺序刷写**（platform-tools 的标准写法是把标志放在 `flash` 之前）：\n\n   ```\n   fastboot --disable-verity --disable-verification flash vbmeta vbmeta.img\n   ```\n\n   若本机存在独立的 vbmeta_system：\n\n   ```\n   fastboot --disable-verity --disable-verification flash vbmeta_system vbmeta_system.img\n   ```\n\n   网上常见写成 `fastboot flash vbmeta --disable-verity --disable-verification vbmeta.img`（标志放在分区名之后）。这种写法在部分 fastboot / platform-tools 版本上参数不会被解析，等于没有关掉校验，刷完仍报错 —— 请优先使用上面的标准顺序，并留意命令回显是否真的执行成功。\n\n5. **明白这样做的风险与副作用，再决定要不要做**：\n\n   - `--disable-verity` / `--disable-verification` 会关闭分区的完整性校验，等于放弃 AVB 的保护，系统被篡改时不再拦截，安全性下降。\n   - 可能影响官方 OTA：校验状态与官方预期不一致时，OTA 可能拒绝安装或安装失败。\n   - 部分机型 / 系统（尤其新版本 HyperOS）对非官方 vbmeta 还有额外校验，即使关了校验也可能仍拒绝启动。关校验不是万能的「修复开机」手段。\n   - 只有在明确需要（刷第三方内核 / GSI / root 等）且接受上述后果时才使用；纯粹想消除开机警告、又希望保持官方状态的话，不该走这一步。\n\n6. **想恢复官方校验状态**：刷回官方 vbmeta（不带 disable 标志）：\n\n   ```\n   fastboot flash vbmeta vbmeta.img\n   ```\n\n   注意：官方 vbmeta 要求其它被校验分区也是官方版本，只换 vbmeta 而其它分区仍是改过的镜像，照样校验失败。这种情况下需要刷官方完整 fastboot 包整机恢复：报错处理见 [[fastboot-flash-errors]]。\n\n7. **刷完仍开不了机**：清数据后重试（改过分区 / 跨版本时必须清）：\n\n   ```\n   fastboot erase userdata\n   ```\n\n   或刷含清数据步骤的官方整包。数据分区挂载失败、卡 recovery 的排查见 [[recovery-cant-load-android-system]]。\n\n8. **确认镜像本身没问题再反复刷**：同一个包重复刷 2～3 次仍失败，通常不是刷写动作问题，而是包 / 分区组合不对，换回官方同版本包验证。",
+      "verify": "- 开机不再出现 `dm-verity corruption`、`Your device is corrupt. It can't be trusted`、`AVB: vbmeta verification failed`。注意解锁设备常见的「设备已解锁」警告属正常，不算修复失败。\n- ```\n  fastboot getvar unlocked\n  ```\n\n  与 `fastboot getvar current-slot` 返回值符合当前预期，设备能稳定进入系统而不是反复重启。\n- 若目的是 root / GSI / 第三方内核：目标功能（如 root 管理工具）可用，且系统能正常开机、能正常读写数据。\n- 若目的是恢复官方状态：能正常开机，且系统内版本信息与官方包一致。",
+      "todo": "- 具体哪些机型存在独立的 `vbmeta_system` / `vbmeta_vendor` 等分区，视机型与分区布局而定，待确认。\n- 各 platform-tools 版本对 `--disable-verity` / `--disable-verification` 参数位置的解析行为差异，以及哪些 bootloader 会直接拒绝该标志，待确认。\n- 新版 HyperOS 对非官方 vbmeta / 非官方分区的额外检测策略（是否仍允许启动）待确认。\n- 关闭校验后官方 OTA 的失败表现随版本不同，具体行为待确认。",
+      "body": "# AVB / verified boot 报错：dm-verity corruption / Your device is corrupt / vbmeta verification failed\n\n## 症状\n\n开机时出现完整性校验警告：\n\n```\ndm-verity corruption\nYour device is corrupt. It can't be trusted and may not work properly.\n```\n\n```\nAVB: vbmeta verification failed\n```\n\n其他常见伴随现象：\n\n- bootloader 界面出现红字 / 黄字警告，需要按键才能继续，或者继续后卡住 / 自动重启。\n- 刷入修改过的 boot、system 等分区（root、GSI、第三方内核）之后开始出现，之前正常。\n- 刷过 `vbmeta` 后 `dm-verity corruption` 不再出现，但仍然无法进入系统。\n- 已解锁设备日常也可能显示「设备已解锁」一类警告，这是解锁提示，与 `Your device is corrupt` 这类完整性校验失败不是同一回事。\n\n## 原因\n\n- **改了受 AVB 保护的分区，但 vbmeta 里的校验信息没同步更新**：AVB 会用 vbmeta（及其关联的 vbmeta_system 等，视机型而定）中的哈希 / 描述符校验各分区，任何改动都会让校验失败，于是报 `vbmeta verification failed` / `dm-verity corruption` / `Your device is corrupt`。\n- **镜像与机型 / 版本不匹配**：刷了别机型或不同版本的 vbmeta、boot 等镜像，描述符与分区内容对不上，同样校验失败。\n- **verity / verification 标志与实际分区状态不一致**：只刷了带 `--disable-verity` 的 vbmeta，却没有刷对应的其它分区镜像（或反过来），状态组合矛盾时就可能仍无法启动。\n- **解锁后刷了非官方固件**：这类警告本身属于预期现象；若伴随无法开机，问题在于镜像不匹配或数据分区需要清理，而不是警告文字本身。\n\n## 步骤\n\n1. **确认已解锁**（未解锁无法刷 vbmeta）：\n\n   ```\n   fastboot getvar unlocked\n   ```\n\n   返回 `unlocked: yes` 再继续；不是 `yes` 先看 [[fastboot-unlock-token-verify-failed]]。\n\n2. **确认在正确的 fastboot 环境**：vbmeta 属于物理分区，应在 bootloader fastboot（音量下 + 电源进入）下刷，不要在 fastbootd 里刷。用下面命令区分当前环境：\n\n   ```\n   fastboot getvar is-userspace\n   ```\n\n   `yes` 表示极可能是 fastbootd，需要回到 bootloader fastboot 再操作；识别与驱动问题见 [[fastboot-devices-not-detected]]。\n\n3. **取官方镜像**：从本机对应版本的官方 fastboot 完整包里取 `vbmeta.img`。A/B 机型是否另有独立的 `vbmeta_system.img` 等，视机型而定（见 待确认），有就一并处理。\n\n4. **按正确参数顺序刷写**（platform-tools 的标准写法是把标志放在 `flash` 之前）：\n\n   ```\n   fastboot --disable-verity --disable-verification flash vbmeta vbmeta.img\n   ```\n\n   若本机存在独立的 vbmeta_system：\n\n   ```\n   fastboot --disable-verity --disable-verification flash vbmeta_system vbmeta_system.img\n   ```\n\n   网上常见写成 `fastboot flash vbmeta --disable-verity --disable-verification vbmeta.img`（标志放在分区名之后）。这种写法在部分 fastboot / platform-tools 版本上参数不会被解析，等于没有关掉校验，刷完仍报错 —— 请优先使用上面的标准顺序，并留意命令回显是否真的执行成功。\n\n5. **明白这样做的风险与副作用，再决定要不要做**：\n\n   - `--disable-verity` / `--disable-verification` 会关闭分区的完整性校验，等于放弃 AVB 的保护，系统被篡改时不再拦截，安全性下降。\n   - 可能影响官方 OTA：校验状态与官方预期不一致时，OTA 可能拒绝安装或安装失败。\n   - 部分机型 / 系统（尤其新版本 HyperOS）对非官方 vbmeta 还有额外校验，即使关了校验也可能仍拒绝启动。关校验不是万能的「修复开机」手段。\n   - 只有在明确需要（刷第三方内核 / GSI / root 等）且接受上述后果时才使用；纯粹想消除开机警告、又希望保持官方状态的话，不该走这一步。\n\n6. **想恢复官方校验状态**：刷回官方 vbmeta（不带 disable 标志）：\n\n   ```\n   fastboot flash vbmeta vbmeta.img\n   ```\n\n   注意：官方 vbmeta 要求其它被校验分区也是官方版本，只换 vbmeta 而其它分区仍是改过的镜像，照样校验失败。这种情况下需要刷官方完整 fastboot 包整机恢复：报错处理见 [[fastboot-flash-errors]]。\n\n7. **刷完仍开不了机**：清数据后重试（改过分区 / 跨版本时必须清）：\n\n   ```\n   fastboot erase userdata\n   ```\n\n   或刷含清数据步骤的官方整包。数据分区挂载失败、卡 recovery 的排查见 [[recovery-cant-load-android-system]]。\n\n8. **确认镜像本身没问题再反复刷**：同一个包重复刷 2～3 次仍失败，通常不是刷写动作问题，而是包 / 分区组合不对，换回官方同版本包验证。\n\n## 验证\n\n- 开机不再出现 `dm-verity corruption`、`Your device is corrupt. It can't be trusted`、`AVB: vbmeta verification failed`。注意解锁设备常见的「设备已解锁」警告属正常，不算修复失败。\n- ```\n  fastboot getvar unlocked\n  ```\n\n  与 `fastboot getvar current-slot` 返回值符合当前预期，设备能稳定进入系统而不是反复重启。\n- 若目的是 root / GSI / 第三方内核：目标功能（如 root 管理工具）可用，且系统能正常开机、能正常读写数据。\n- 若目的是恢复官方状态：能正常开机，且系统内版本信息与官方包一致。\n\n## 待确认\n\n- 具体哪些机型存在独立的 `vbmeta_system` / `vbmeta_vendor` 等分区，视机型与分区布局而定，待确认。\n- 各 platform-tools 版本对 `--disable-verity` / `--disable-verification` 参数位置的解析行为差异，以及哪些 bootloader 会直接拒绝该标志，待确认。\n- 新版 HyperOS 对非官方 vbmeta / 非官方分区的额外检测策略（是否仍允许启动）待确认。\n- 关闭校验后官方 OTA 的失败表现随版本不同，具体行为待确认。",
+      "path": "wiki/howtos/avb-verified-boot-corruption.md"
+    },
+    {
+      "slug": "fastboot-devices-not-detected",
+      "title": "fastboot devices 不识别 / waiting for any device：USB 驱动与 fastbootd 模式区分",
+      "platform": "fastboot",
+      "category": "howtos",
+      "tags": [
+        "fastboot",
+        "recovery",
+        "xiaomi",
+        "usb-driver",
+        "fastbootd",
+        "connection"
+      ],
+      "keywords": [
+        "waiting for any device",
+        "fastboot devices",
+        "USB驱动",
+        "fastbootd",
+        "fastboot 不识别",
+        "无法连接电脑",
+        "bootloader"
+      ],
+      "symptom": "PC 上执行 fastboot 命令，设备列表为空：\n\n```\n$ fastboot devices\n$\n```\n\n或者命令一直挂着等待：\n\n```\n$ fastboot flash boot boot.img\n< waiting for any device >\n```\n\n其他常见伴随现象：\n\n- 设备管理器里能看到一个带黄色感叹号的未知设备 / `Android` 设备，或显示为错误的设备类型。\n- `adb devices` 能识别（系统已启动时），但进 fastboot 后 `fastboot devices` 没有输出；或者反过来。\n- 手机关机后按音量下 + 电源进入的界面里有 `FASTBOOT` 字样，但 PC 就是认不到。\n- 已经能用 adb，执行 `adb reboot fastboot` 之后 fastboot 又认不到设备了（换了 USB 模式，驱动没跟上）。",
+      "cause": "- **驱动缺失或装错**：Windows 下 bootloader fastboot 模式的设备需要匹配的 USB 驱动（例如 Google USB Driver 提供的 `Android Bootloader Interface`，或厂商驱动）。驱动不对时设备管理器会带感叹号，fastboot 自然看不到设备。\n- **fastbootd 与 bootloader fastboot 是两个不同的 USB 环境**：fastbootd 是 Android 用户空间里的 fastboot（USB 由 Android 内核枚举），bootloader fastboot 是引导程序自己的实现。两者的 USB 标识与驱动要求不同，可能导致「一个能认、另一个认不到」。\n- **线材 / 接口问题**：只能充电的线、前置面板或 Hub、部分 USB 3.x 口的兼容性问题都会导致枚举失败。\n- **多设备 / 指定设备问题**：同时接了多台设备时 `fastboot devices` 可能因为未指定序列号而混乱，需要用 `-s <序列号>` 指定。",
+      "steps": "1. **确认设备处于正确的 fastboot 界面**：关机后按住音量下 + 电源，进入带 `FASTBOOT` 字样的界面（小米机型屏幕通常有 fastboot 图标或文字），再插数据线。看屏幕上是否有反应。\n\n2. **确认接线**：使用原装或确认能传数据的线，优先插主板后置 USB 口（USB 2.0 口兼容性更好），去掉 Hub / 延长线 / 转接头，然后重试：\n\n   ```\n   fastboot devices\n   ```\n\n3. **检查并安装驱动（Windows）**：\n\n   1. 打开设备管理器，找到带感叹号或显示异常的设备（可能显示为 `Android`、`Android Bootloader Interface`、未知设备）。\n   2. 右键 → 更新驱动程序 → 手动浏览 → 选择 `Android Bootloader Interface`（Google USB Driver 提供）或厂商官方驱动。\n   3. 装好后设备管理器里应显示为正常的 `Android Bootloader Interface`，此时再执行 `fastboot devices`。\n\n4. **更新 platform-tools**：过旧的 fastboot 对新机型支持差，可能因为无法识别新的 USB 标识而看不到设备。使用官方最新版 platform-tools，并确保 PATH 里只有这一份。\n\n5. **区分 fastbootd 与 bootloader fastboot**（这一步很关键，决定你能刷什么）：\n\n   - 进入 fastbootd（需要系统能启动并已连接 adb）：\n\n     ```\n     adb reboot fastboot\n     ```\n\n     或设备已在 bootloader fastboot 时：\n\n     ```\n     fastboot reboot fastboot\n     ```\n\n   - 判断当前在哪一边：\n\n     ```\n     fastboot getvar is-userspace\n     ```\n\n     - 返回 `yes`：用户空间 fastboot（fastbootd），动态分区（逻辑分区）在这里才可见、可刷。\n     - 返回 `no` 或被拒绝：bootloader fastboot，vbmeta / bootloader 一类物理分区在这里刷。\n   - 另外可用 `fastboot getvar product` 确认机型识别是否正常，用 `fastboot getvar current-slot` 看槽位。\n   - 两边能刷的分区不同，刷错环境会报分区不存在一类的错，见 [[fastboot-flash-errors]]。\n\n6. **多设备场景指定序列号**：\n\n   ```\n   fastboot devices -l\n   fastboot -s <序列号> getvar product\n   ```\n\n   如果只有一台设备，先拔掉其它 USB 设备重试，排除干扰。\n\n7. **还是认不到时，按顺序换变量定位**：\n\n   1. 换另一根数据线 + 另一个 USB 口，重新插拔（不要在同一个口反复试）。\n   2. 换到另一台电脑（最好是没装过第三方手机助手的干净系统）试。\n   3. 尝试在 Linux 环境下执行 `fastboot devices`（通常免驱）：如果 Linux 下能认到，说明问题在 Windows 驱动侧；如果两边都认不到，重点怀疑线材 / 接口 / 设备侧 USB 问题。\n\n8. **如果 `adb devices` 也认不到**：那属于 ADB 侧识别问题，先修好 adb 识别（驱动、授权弹窗）再进 fastboot；本页只覆盖 fastboot 侧。\n\n9. **兜底**：如果任何模式都连不上 PC，无法线刷，可考虑 EDL/9008 等方式（需授权 / 售后渠道），见 [[qualcomm-edl-9008-enter]]；联发科平台见 [[mtk-spflash-error-4032-4004-4008]]。",
+      "verify": "- ```\n  fastboot devices\n  ```\n\n  输出一行 `<序列号>  fastboot`（在 fastbootd 下同样应出现），且序列号与设备实际一致。\n- ```\n  fastboot getvar product\n  ```\n\n  能返回本机机型代号，而不是报错或空结果。\n- ```\n  fastboot getvar is-userspace\n  ```\n\n  返回值与你预期所处的模式一致（`yes` = fastbootd，`no` = bootloader fastboot），说明模式区分清楚、不会再刷错环境。\n- ```\n  fastboot reboot\n  ```\n\n  能正常重启回系统（或按预期进入下一步目标模式）。",
+      "todo": "- 不同平台（高通 / 联发科）与具体机型在 fastbootd 下的 USB VID/PID 及所需驱动不同，待按机型确认。\n- 部分新机型需要特定最低版本的 platform-tools 才能识别，具体最低版本待确认。\n- `fastboot reboot fastboot` 在哪些机型 / bootloader 版本上不可用，待确认。\n- 各机型 fastbootd 下可刷的分区清单差异待确认。",
+      "body": "# fastboot devices 不识别 / waiting for any device：USB 驱动与 fastbootd 模式区分\n\n## 症状\n\nPC 上执行 fastboot 命令，设备列表为空：\n\n```\n$ fastboot devices\n$\n```\n\n或者命令一直挂着等待：\n\n```\n$ fastboot flash boot boot.img\n< waiting for any device >\n```\n\n其他常见伴随现象：\n\n- 设备管理器里能看到一个带黄色感叹号的未知设备 / `Android` 设备，或显示为错误的设备类型。\n- `adb devices` 能识别（系统已启动时），但进 fastboot 后 `fastboot devices` 没有输出；或者反过来。\n- 手机关机后按音量下 + 电源进入的界面里有 `FASTBOOT` 字样，但 PC 就是认不到。\n- 已经能用 adb，执行 `adb reboot fastboot` 之后 fastboot 又认不到设备了（换了 USB 模式，驱动没跟上）。\n\n## 原因\n\n- **驱动缺失或装错**：Windows 下 bootloader fastboot 模式的设备需要匹配的 USB 驱动（例如 Google USB Driver 提供的 `Android Bootloader Interface`，或厂商驱动）。驱动不对时设备管理器会带感叹号，fastboot 自然看不到设备。\n- **fastbootd 与 bootloader fastboot 是两个不同的 USB 环境**：fastbootd 是 Android 用户空间里的 fastboot（USB 由 Android 内核枚举），bootloader fastboot 是引导程序自己的实现。两者的 USB 标识与驱动要求不同，可能导致「一个能认、另一个认不到」。\n- **线材 / 接口问题**：只能充电的线、前置面板或 Hub、部分 USB 3.x 口的兼容性问题都会导致枚举失败。\n- **多设备 / 指定设备问题**：同时接了多台设备时 `fastboot devices` 可能因为未指定序列号而混乱，需要用 `-s <序列号>` 指定。\n\n## 步骤\n\n1. **确认设备处于正确的 fastboot 界面**：关机后按住音量下 + 电源，进入带 `FASTBOOT` 字样的界面（小米机型屏幕通常有 fastboot 图标或文字），再插数据线。看屏幕上是否有反应。\n\n2. **确认接线**：使用原装或确认能传数据的线，优先插主板后置 USB 口（USB 2.0 口兼容性更好），去掉 Hub / 延长线 / 转接头，然后重试：\n\n   ```\n   fastboot devices\n   ```\n\n3. **检查并安装驱动（Windows）**：\n\n   1. 打开设备管理器，找到带感叹号或显示异常的设备（可能显示为 `Android`、`Android Bootloader Interface`、未知设备）。\n   2. 右键 → 更新驱动程序 → 手动浏览 → 选择 `Android Bootloader Interface`（Google USB Driver 提供）或厂商官方驱动。\n   3. 装好后设备管理器里应显示为正常的 `Android Bootloader Interface`，此时再执行 `fastboot devices`。\n\n4. **更新 platform-tools**：过旧的 fastboot 对新机型支持差，可能因为无法识别新的 USB 标识而看不到设备。使用官方最新版 platform-tools，并确保 PATH 里只有这一份。\n\n5. **区分 fastbootd 与 bootloader fastboot**（这一步很关键，决定你能刷什么）：\n\n   - 进入 fastbootd（需要系统能启动并已连接 adb）：\n\n     ```\n     adb reboot fastboot\n     ```\n\n     或设备已在 bootloader fastboot 时：\n\n     ```\n     fastboot reboot fastboot\n     ```\n\n   - 判断当前在哪一边：\n\n     ```\n     fastboot getvar is-userspace\n     ```\n\n     - 返回 `yes`：用户空间 fastboot（fastbootd），动态分区（逻辑分区）在这里才可见、可刷。\n     - 返回 `no` 或被拒绝：bootloader fastboot，vbmeta / bootloader 一类物理分区在这里刷。\n   - 另外可用 `fastboot getvar product` 确认机型识别是否正常，用 `fastboot getvar current-slot` 看槽位。\n   - 两边能刷的分区不同，刷错环境会报分区不存在一类的错，见 [[fastboot-flash-errors]]。\n\n6. **多设备场景指定序列号**：\n\n   ```\n   fastboot devices -l\n   fastboot -s <序列号> getvar product\n   ```\n\n   如果只有一台设备，先拔掉其它 USB 设备重试，排除干扰。\n\n7. **还是认不到时，按顺序换变量定位**：\n\n   1. 换另一根数据线 + 另一个 USB 口，重新插拔（不要在同一个口反复试）。\n   2. 换到另一台电脑（最好是没装过第三方手机助手的干净系统）试。\n   3. 尝试在 Linux 环境下执行 `fastboot devices`（通常免驱）：如果 Linux 下能认到，说明问题在 Windows 驱动侧；如果两边都认不到，重点怀疑线材 / 接口 / 设备侧 USB 问题。\n\n8. **如果 `adb devices` 也认不到**：那属于 ADB 侧识别问题，先修好 adb 识别（驱动、授权弹窗）再进 fastboot；本页只覆盖 fastboot 侧。\n\n9. **兜底**：如果任何模式都连不上 PC，无法线刷，可考虑 EDL/9008 等方式（需授权 / 售后渠道），见 [[qualcomm-edl-9008-enter]]；联发科平台见 [[mtk-spflash-error-4032-4004-4008]]。\n\n## 验证\n\n- ```\n  fastboot devices\n  ```\n\n  输出一行 `<序列号>  fastboot`（在 fastbootd 下同样应出现），且序列号与设备实际一致。\n- ```\n  fastboot getvar product\n  ```\n\n  能返回本机机型代号，而不是报错或空结果。\n- ```\n  fastboot getvar is-userspace\n  ```\n\n  返回值与你预期所处的模式一致（`yes` = fastbootd，`no` = bootloader fastboot），说明模式区分清楚、不会再刷错环境。\n- ```\n  fastboot reboot\n  ```\n\n  能正常重启回系统（或按预期进入下一步目标模式）。\n\n## 待确认\n\n- 不同平台（高通 / 联发科）与具体机型在 fastbootd 下的 USB VID/PID 及所需驱动不同，待按机型确认。\n- 部分新机型需要特定最低版本的 platform-tools 才能识别，具体最低版本待确认。\n- `fastboot reboot fastboot` 在哪些机型 / bootloader 版本上不可用，待确认。\n- 各机型 fastbootd 下可刷的分区清单差异待确认。",
+      "path": "wiki/howtos/fastboot-devices-not-detected.md"
+    },
+    {
+      "slug": "fastboot-flash-errors",
+      "title": "fastboot flash 失败：Partition table doesn't exist / not allowed in locked state / Flashing is not allowed",
+      "platform": "fastboot",
+      "category": "howtos",
+      "tags": [
+        "fastboot",
+        "recovery",
+        "xiaomi",
+        "flash",
+        "bootloader"
+      ],
+      "keywords": [
+        "Partition table doesn't exist",
+        "not allowed in locked state",
+        "Flashing is not allowed",
+        "fastboot flash failed",
+        "刷机失败",
+        "解锁BL",
+        "进不去系统"
+      ],
+      "symptom": "在 fastboot 下刷任意分区时，镜像已经 `Sending` 成功，但 `Writing` 阶段被 bootloader 拒绝：\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'Partition table doesn't exist')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'not allowed in locked state')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot flash system system.img\nSending sparse 'system' (262140 KB)                  OKAY [  6.201s]\nWriting 'system'                                     FAILED (remote: 'Flashing is not allowed')\nfastboot: error: Command failed\n```\n\n其他常见伴随现象：\n\n- 只有部分分区报错，另外一些分区能刷成功。\n- 换一个分区名再刷还是同样报错，或者报 `FAILED (remote: 'unknown partition')` 之类的近似错误。\n- 报 `not allowed in locked state` / `Flashing is not allowed` 时，设备通常仍处于锁定状态，`fastboot getvar unlocked` 返回 `no`。",
+      "cause": "- **镜像包与机型不匹配**：用了别的机型的 fastboot 包（或跨版本、跨平台包），包内分区名与本机 GPT 对不上，bootloader 就报 `Partition table doesn't exist` / 找不到分区。\n- **bootloader 仍处于锁定（locked）状态**：小米设备解锁前禁止写入任何分区，表现就是 `not allowed in locked state` 或 `Flashing is not allowed`。解锁流程与等待期见 [[fastboot-unlock-token-verify-failed]]。\n- **刷写环境选错了**：动态分区（逻辑分区，如 system/vendor/product 一类）只存在于用户空间 fastboot（fastbootd）里；在 bootloader fastboot 下这些分区不在 GPT 中，自然报找不到。反之 vbmeta、bootloader 相关分区必须在 bootloader fastboot 下刷。模式区分见 [[fastboot-devices-not-detected]]。\n- **个别机型/区域版本对特定分区做了额外保护**，即使已解锁也不允许直接刷写，具体清单视机型而定（见 待确认）。",
+      "steps": "1. **先确认设备真的被 PC 识别**，避免把连接问题误判成刷写失败：\n\n   ```\n   fastboot devices\n   ```\n\n   正常应输出一行 `<序列号>  fastboot`。没有输出先处理 [[fastboot-devices-not-detected]]。\n\n2. **确认机型与当前模式**：\n\n   ```\n   fastboot getvar product\n   fastboot getvar current-slot\n   fastboot getvar is-userspace\n   ```\n\n   `product` 应与你准备刷入的包对应；`is-userspace: yes` 表示当前是 fastbootd，`no`（或因锁定而不返回）表示 bootloader fastboot。\n\n3. **确认目标分区是否存在**（把 `boot` 换成你要刷的分区名）：\n\n   ```\n   fastboot getvar partition-size:boot\n   ```\n\n   返回数值说明该分区在当前模式下可见；报错或返回空，说明这个分区名在当前 GPT 里不存在 —— 先别继续硬刷。\n\n4. **如果是 `not allowed in locked state` / `Flashing is not allowed`**：停止反复重试，先去解锁 bootloader。解锁会清空全部数据，务必先备份。\n\n   ```\n   fastboot flashing unlock\n   ```\n\n   部分机型/版本用 `fastboot oem unlock`。解锁成功后确认：\n\n   ```\n   fastboot getvar unlocked\n   ```\n\n   返回 `unlocked: yes` 才算真正解锁。若报 `Token verify failed`、`Unlock failed`、提示等待 168 小时，见 [[fastboot-unlock-token-verify-failed]]。\n\n5. **如果是 `Partition table doesn't exist`**，按下面顺序排查：\n\n   1. 核对包与机型：只用本机对应的官方 fastboot 完整包（含 `flash_all.bat` / `flash_all.sh` 的整包），逐条执行包内脚本，而不是自己拼分区名。脚本执行报错的排查见 [[miflash-flash-script-errors]]。\n   2. 判断该分区是不是逻辑分区：如果是，切到 fastbootd 再刷。\n\n      ```\n      adb reboot fastboot\n      ```\n\n      或设备已在 bootloader 时：\n\n      ```\n      fastboot reboot fastboot\n      ```\n\n      进入后用 `fastboot getvar is-userspace` 确认返回 `yes`，再重试 `fastboot flash <分区> <镜像>`。\n   3. 确认镜像本身完整：重新解压 / 重新下载，避免解压中断产生半截镜像。\n   4. 若整包脚本总是卡在同一个分区，先确认该分区名是否属于本机；不要为了「刷进去」而随意改名。\n\n6. **A/B 机型补充分区槽位信息**（视 platform-tools 版本支持情况，参数形式可能不同）：\n\n   ```\n   fastboot getvar current-slot\n   fastboot flash boot boot.img\n   ```\n\n   如需明确指定槽位，可用 `--slot` 相关参数或 `fastboot --set-active=a`，具体写法与 bootloader 支持情况以本机实测为准（见 待确认）。没有把握时不要同时改动两个槽位。\n\n7. **换环境排除干扰**：换一根能传数据的线、换主板后置 USB 口（优先 USB 2.0）、去掉 Hub，再重新执行 `fastboot devices` 和刷写命令。\n\n8. **兜底**：如果已经解锁、包也确认匹配，但 bootloader 始终拒绝写入，可考虑进入 EDL/9008 用官方工具重刷（需授权 / 售后渠道），见 [[qualcomm-edl-9008-enter]]；联发科平台另见 [[mtk-spflash-error-4032-4004-4008]]。不要使用来源不明的编程器文件。",
+      "verify": "- 重新执行刷写命令，`Writing '<分区>'` 返回 `OKAY` 而不是 `FAILED`。\n- `fastboot getvar unlocked` 返回 `unlocked: yes`（对应 locked 类报错已解决）。\n- `fastboot reboot` 后设备能正常开机进入系统；或先在 recovery 中确认能挂载分区、能读写内部存储。\n- 开机后在「设置 → 关于手机」中核对版本号与所刷固件一致；如仍无法开机，按 [[recovery-cant-load-android-system]] 处理数据分区问题。",
+      "todo": "- 具体哪些分区名只在 fastbootd（用户空间 fastboot）可见、哪些只在 bootloader fastboot 可刷，视机型与平台（高通 / 联发科）而定，待确认。\n- `Partition table doesn't exist` 在不同 bootloader 版本、不同 platform-tools 版本下的精确触发条件存在差异，待确认。\n- 部分机型即使解锁仍禁止刷写的分区清单（若存在）待确认。\n- `--slot` 参数的正确写法与最低 platform-tools 版本要求待确认。",
+      "body": "# fastboot flash 失败：Partition table doesn't exist / not allowed in locked state / Flashing is not allowed\n\n## 症状\n\n在 fastboot 下刷任意分区时，镜像已经 `Sending` 成功，但 `Writing` 阶段被 bootloader 拒绝：\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'Partition table doesn't exist')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'not allowed in locked state')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot flash system system.img\nSending sparse 'system' (262140 KB)                  OKAY [  6.201s]\nWriting 'system'                                     FAILED (remote: 'Flashing is not allowed')\nfastboot: error: Command failed\n```\n\n其他常见伴随现象：\n\n- 只有部分分区报错，另外一些分区能刷成功。\n- 换一个分区名再刷还是同样报错，或者报 `FAILED (remote: 'unknown partition')` 之类的近似错误。\n- 报 `not allowed in locked state` / `Flashing is not allowed` 时，设备通常仍处于锁定状态，`fastboot getvar unlocked` 返回 `no`。\n\n## 原因\n\n- **镜像包与机型不匹配**：用了别的机型的 fastboot 包（或跨版本、跨平台包），包内分区名与本机 GPT 对不上，bootloader 就报 `Partition table doesn't exist` / 找不到分区。\n- **bootloader 仍处于锁定（locked）状态**：小米设备解锁前禁止写入任何分区，表现就是 `not allowed in locked state` 或 `Flashing is not allowed`。解锁流程与等待期见 [[fastboot-unlock-token-verify-failed]]。\n- **刷写环境选错了**：动态分区（逻辑分区，如 system/vendor/product 一类）只存在于用户空间 fastboot（fastbootd）里；在 bootloader fastboot 下这些分区不在 GPT 中，自然报找不到。反之 vbmeta、bootloader 相关分区必须在 bootloader fastboot 下刷。模式区分见 [[fastboot-devices-not-detected]]。\n- **个别机型/区域版本对特定分区做了额外保护**，即使已解锁也不允许直接刷写，具体清单视机型而定（见 待确认）。\n\n## 步骤\n\n1. **先确认设备真的被 PC 识别**，避免把连接问题误判成刷写失败：\n\n   ```\n   fastboot devices\n   ```\n\n   正常应输出一行 `<序列号>  fastboot`。没有输出先处理 [[fastboot-devices-not-detected]]。\n\n2. **确认机型与当前模式**：\n\n   ```\n   fastboot getvar product\n   fastboot getvar current-slot\n   fastboot getvar is-userspace\n   ```\n\n   `product` 应与你准备刷入的包对应；`is-userspace: yes` 表示当前是 fastbootd，`no`（或因锁定而不返回）表示 bootloader fastboot。\n\n3. **确认目标分区是否存在**（把 `boot` 换成你要刷的分区名）：\n\n   ```\n   fastboot getvar partition-size:boot\n   ```\n\n   返回数值说明该分区在当前模式下可见；报错或返回空，说明这个分区名在当前 GPT 里不存在 —— 先别继续硬刷。\n\n4. **如果是 `not allowed in locked state` / `Flashing is not allowed`**：停止反复重试，先去解锁 bootloader。解锁会清空全部数据，务必先备份。\n\n   ```\n   fastboot flashing unlock\n   ```\n\n   部分机型/版本用 `fastboot oem unlock`。解锁成功后确认：\n\n   ```\n   fastboot getvar unlocked\n   ```\n\n   返回 `unlocked: yes` 才算真正解锁。若报 `Token verify failed`、`Unlock failed`、提示等待 168 小时，见 [[fastboot-unlock-token-verify-failed]]。\n\n5. **如果是 `Partition table doesn't exist`**，按下面顺序排查：\n\n   1. 核对包与机型：只用本机对应的官方 fastboot 完整包（含 `flash_all.bat` / `flash_all.sh` 的整包），逐条执行包内脚本，而不是自己拼分区名。脚本执行报错的排查见 [[miflash-flash-script-errors]]。\n   2. 判断该分区是不是逻辑分区：如果是，切到 fastbootd 再刷。\n\n      ```\n      adb reboot fastboot\n      ```\n\n      或设备已在 bootloader 时：\n\n      ```\n      fastboot reboot fastboot\n      ```\n\n      进入后用 `fastboot getvar is-userspace` 确认返回 `yes`，再重试 `fastboot flash <分区> <镜像>`。\n   3. 确认镜像本身完整：重新解压 / 重新下载，避免解压中断产生半截镜像。\n   4. 若整包脚本总是卡在同一个分区，先确认该分区名是否属于本机；不要为了「刷进去」而随意改名。\n\n6. **A/B 机型补充分区槽位信息**（视 platform-tools 版本支持情况，参数形式可能不同）：\n\n   ```\n   fastboot getvar current-slot\n   fastboot flash boot boot.img\n   ```\n\n   如需明确指定槽位，可用 `--slot` 相关参数或 `fastboot --set-active=a`，具体写法与 bootloader 支持情况以本机实测为准（见 待确认）。没有把握时不要同时改动两个槽位。\n\n7. **换环境排除干扰**：换一根能传数据的线、换主板后置 USB 口（优先 USB 2.0）、去掉 Hub，再重新执行 `fastboot devices` 和刷写命令。\n\n8. **兜底**：如果已经解锁、包也确认匹配，但 bootloader 始终拒绝写入，可考虑进入 EDL/9008 用官方工具重刷（需授权 / 售后渠道），见 [[qualcomm-edl-9008-enter]]；联发科平台另见 [[mtk-spflash-error-4032-4004-4008]]。不要使用来源不明的编程器文件。\n\n## 验证\n\n- 重新执行刷写命令，`Writing '<分区>'` 返回 `OKAY` 而不是 `FAILED`。\n- `fastboot getvar unlocked` 返回 `unlocked: yes`（对应 locked 类报错已解决）。\n- `fastboot reboot` 后设备能正常开机进入系统；或先在 recovery 中确认能挂载分区、能读写内部存储。\n- 开机后在「设置 → 关于手机」中核对版本号与所刷固件一致；如仍无法开机，按 [[recovery-cant-load-android-system]] 处理数据分区问题。\n\n## 待确认\n\n- 具体哪些分区名只在 fastbootd（用户空间 fastboot）可见、哪些只在 bootloader fastboot 可刷，视机型与平台（高通 / 联发科）而定，待确认。\n- `Partition table doesn't exist` 在不同 bootloader 版本、不同 platform-tools 版本下的精确触发条件存在差异，待确认。\n- 部分机型即使解锁仍禁止刷写的分区清单（若存在）待确认。\n- `--slot` 参数的正确写法与最低 platform-tools 版本要求待确认。",
+      "path": "wiki/howtos/fastboot-flash-errors.md"
+    },
+    {
+      "slug": "fastboot-unlock-token-verify-failed",
+      "title": "fastboot 解锁失败：Token verify failed / Unlock failed / Please unlock your device first（含 168 小时等待）",
+      "platform": "fastboot",
+      "category": "howtos",
+      "tags": [
+        "fastboot",
+        "recovery",
+        "xiaomi",
+        "unlock",
+        "bootloader",
+        "mi-account"
+      ],
+      "keywords": [
+        "Token verify failed",
+        "Unlock failed",
+        "Please unlock your device first",
+        "168小时",
+        "解锁BL",
+        "小米账号绑定",
+        "flashing unlock"
+      ],
+      "symptom": "PC 端解锁工具或命令行报错：\n\n```\n$ fastboot flashing unlock\n...\nFAILED (remote: 'Token verify failed')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot oem unlock\n...\nFAILED (remote: 'Unlock failed')\nfastboot: error: Command failed\n```\n\n还没解锁就去刷分区时：\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'Please unlock your device first')\nfastboot: error: Command failed\n```\n\n小米解锁工具（PC 端）侧的表现：\n\n- 提示需要等待 **168 小时**（7 天）后才能解锁，或提示账号与设备未绑定 / 绑定未满时长。\n- 提示当前账号本月或本周期内解锁配额已用尽。\n- 报 token 相关错误，或点击解锁后进度停住然后失败。",
+      "cause": "- **解锁前置条件没满足**：小米设备的官方流程要求在手机上登录小米账号、联网，并在开发者选项里把「账号与设备」绑定；绑定成功后通常还要等待 168 小时才能执行解锁。等待期内退出账号、恢复出厂设置或刷机，计时可能被重置。\n- **`Token verify failed`**：PC 端解锁工具拿到的解锁 token 与设备/账号不匹配或已失效。常见诱因：账号与手机登录的账号不是同一个、绑定关系已被重置、使用了非官方或过旧的解锁工具、网络环境（代理/VPN）或系统时间异常。\n- **`Unlock failed`**：等待期未满、账号与设备未绑定、账号解锁配额已用尽，或该机型/运营商版本本身不允许解锁。\n- **`Please unlock your device first`**：这是结果而不是解锁失败——设备仍是 locked 状态，所有写分区操作都被拒绝。先把解锁做掉，见 [[fastboot-flash-errors]]。",
+      "steps": "1. **在手机上完成账号绑定**（路径随 MIUI / HyperOS 版本略有差异）：\n\n   1. 设置 → 关于手机 → 连续点击「MIUI 版本 / 版本号」开启开发者选项。\n   2. 设置 → 更多设置 → 开发者选项 → 找到「设备解锁状态」一类的入口。\n   3. 登录你的小米账号，联网，执行「绑定账号和设备」。\n   4. 绑定成功后界面会给出可解锁时间（通常为 168 小时后）。\n\n2. **等待期内不要动这些**：不要退出小米账号、不要恢复出厂设置、不要刷机或改分区。否则绑定计时可能归零，需要重新等 168 小时。\n\n3. **PC 端准备官方解锁工具**：使用小米官方的解锁工具（Mi Unlock），并在工具里登录与手机**同一个**小米账号。不要使用来源不明的第三方解锁工具或「跳过等待」服务。\n\n4. **进 fastboot 并解锁**：\n\n   ```\n   fastboot devices\n   ```\n\n   确认设备被识别（无输出见 [[fastboot-devices-not-detected]]），然后：\n\n   ```\n   fastboot flashing unlock\n   ```\n\n   部分机型/版本需要用：\n\n   ```\n   fastboot oem unlock\n   ```\n\n   命令行方式在部分机型上可能被要求改用官方工具完成，以工具提示为准。\n\n5. **看到等待提示时**：只能等，没有可靠的跳过的办法。任何声称「付费跳过 168 小时」「秒解锁」的服务都有盗号、盗取解锁权限或植入风险，不要尝试。\n\n6. **`Token verify failed` 的重试清单**（按顺序做完再试一次）：\n\n   1. 确认手机与 PC 端登录的是同一个小米账号。\n   2. 关闭 PC 上的代理 / VPN，检查系统时间是否准确（时间偏差会让 token 校验失败）。\n   3. 换一根能传数据的线、换主板后置 USB 口，重新插拔后重进 fastboot。\n   4. 更新解锁工具到官方最新版，更新 platform-tools。\n   5. 重新执行一次「绑定账号和设备」，等绑定关系生效后再尝试解锁。\n\n7. **解锁成功后的注意点**：解锁会清空全部用户数据（相当于 wipe data），解锁前先备份。设备开机时通常会出现解锁状态警告，属正常现象。\n\n8. **不要随手回锁**：`fastboot flashing lock` 可以重新上锁，但如果当前系统不是官方完整固件、或分区内容与官方校验不一致，回锁后可能直接无法开机。确认整机已刷回官方包再考虑回锁。",
+      "verify": "- ```\n  fastboot getvar unlocked\n  ```\n\n  返回 `unlocked: yes`（未解锁时为 `no`）。\n- 手机「设置 → 开发者选项 → 设备解锁状态」显示已解锁；开机时出现解锁警告画面（视机型）。\n- 重新执行刷写命令不再报 `not allowed in locked state` / `Flashing is not allowed` / `Please unlock your device first`；分区刷写见 [[fastboot-flash-errors]]。\n- 解锁后如出现开机校验报错（dm-verity / vbmeta），见 [[avb-verified-boot-corruption]]。",
+      "todo": "- 绑定的前置条件（是否必须插 SIM 卡、是否必须开启「查找设备」等）随 MIUI / HyperOS 版本与地区版本变化，待确认。\n- 单个账号的解锁配额（数量与周期）、是否额外要求小米社区等级或答题，官方政策会调整，以官方解锁页说明为准，待确认。\n- 部分运营商定制机、企业机或特定型号不支持自助解锁，待确认。\n- `fastboot flashing unlock` 与 `fastboot oem unlock` 在具体机型上的可用性差异待确认。",
+      "body": "# fastboot 解锁失败：Token verify failed / Unlock failed / Please unlock your device first（含 168 小时等待）\n\n## 症状\n\nPC 端解锁工具或命令行报错：\n\n```\n$ fastboot flashing unlock\n...\nFAILED (remote: 'Token verify failed')\nfastboot: error: Command failed\n```\n\n```\n$ fastboot oem unlock\n...\nFAILED (remote: 'Unlock failed')\nfastboot: error: Command failed\n```\n\n还没解锁就去刷分区时：\n\n```\n$ fastboot flash boot boot.img\nSending 'boot' (65536 KB)                            OKAY [  1.532s]\nWriting 'boot'                                       FAILED (remote: 'Please unlock your device first')\nfastboot: error: Command failed\n```\n\n小米解锁工具（PC 端）侧的表现：\n\n- 提示需要等待 **168 小时**（7 天）后才能解锁，或提示账号与设备未绑定 / 绑定未满时长。\n- 提示当前账号本月或本周期内解锁配额已用尽。\n- 报 token 相关错误，或点击解锁后进度停住然后失败。\n\n## 原因\n\n- **解锁前置条件没满足**：小米设备的官方流程要求在手机上登录小米账号、联网，并在开发者选项里把「账号与设备」绑定；绑定成功后通常还要等待 168 小时才能执行解锁。等待期内退出账号、恢复出厂设置或刷机，计时可能被重置。\n- **`Token verify failed`**：PC 端解锁工具拿到的解锁 token 与设备/账号不匹配或已失效。常见诱因：账号与手机登录的账号不是同一个、绑定关系已被重置、使用了非官方或过旧的解锁工具、网络环境（代理/VPN）或系统时间异常。\n- **`Unlock failed`**：等待期未满、账号与设备未绑定、账号解锁配额已用尽，或该机型/运营商版本本身不允许解锁。\n- **`Please unlock your device first`**：这是结果而不是解锁失败——设备仍是 locked 状态，所有写分区操作都被拒绝。先把解锁做掉，见 [[fastboot-flash-errors]]。\n\n## 步骤\n\n1. **在手机上完成账号绑定**（路径随 MIUI / HyperOS 版本略有差异）：\n\n   1. 设置 → 关于手机 → 连续点击「MIUI 版本 / 版本号」开启开发者选项。\n   2. 设置 → 更多设置 → 开发者选项 → 找到「设备解锁状态」一类的入口。\n   3. 登录你的小米账号，联网，执行「绑定账号和设备」。\n   4. 绑定成功后界面会给出可解锁时间（通常为 168 小时后）。\n\n2. **等待期内不要动这些**：不要退出小米账号、不要恢复出厂设置、不要刷机或改分区。否则绑定计时可能归零，需要重新等 168 小时。\n\n3. **PC 端准备官方解锁工具**：使用小米官方的解锁工具（Mi Unlock），并在工具里登录与手机**同一个**小米账号。不要使用来源不明的第三方解锁工具或「跳过等待」服务。\n\n4. **进 fastboot 并解锁**：\n\n   ```\n   fastboot devices\n   ```\n\n   确认设备被识别（无输出见 [[fastboot-devices-not-detected]]），然后：\n\n   ```\n   fastboot flashing unlock\n   ```\n\n   部分机型/版本需要用：\n\n   ```\n   fastboot oem unlock\n   ```\n\n   命令行方式在部分机型上可能被要求改用官方工具完成，以工具提示为准。\n\n5. **看到等待提示时**：只能等，没有可靠的跳过的办法。任何声称「付费跳过 168 小时」「秒解锁」的服务都有盗号、盗取解锁权限或植入风险，不要尝试。\n\n6. **`Token verify failed` 的重试清单**（按顺序做完再试一次）：\n\n   1. 确认手机与 PC 端登录的是同一个小米账号。\n   2. 关闭 PC 上的代理 / VPN，检查系统时间是否准确（时间偏差会让 token 校验失败）。\n   3. 换一根能传数据的线、换主板后置 USB 口，重新插拔后重进 fastboot。\n   4. 更新解锁工具到官方最新版，更新 platform-tools。\n   5. 重新执行一次「绑定账号和设备」，等绑定关系生效后再尝试解锁。\n\n7. **解锁成功后的注意点**：解锁会清空全部用户数据（相当于 wipe data），解锁前先备份。设备开机时通常会出现解锁状态警告，属正常现象。\n\n8. **不要随手回锁**：`fastboot flashing lock` 可以重新上锁，但如果当前系统不是官方完整固件、或分区内容与官方校验不一致，回锁后可能直接无法开机。确认整机已刷回官方包再考虑回锁。\n\n## 验证\n\n- ```\n  fastboot getvar unlocked\n  ```\n\n  返回 `unlocked: yes`（未解锁时为 `no`）。\n- 手机「设置 → 开发者选项 → 设备解锁状态」显示已解锁；开机时出现解锁警告画面（视机型）。\n- 重新执行刷写命令不再报 `not allowed in locked state` / `Flashing is not allowed` / `Please unlock your device first`；分区刷写见 [[fastboot-flash-errors]]。\n- 解锁后如出现开机校验报错（dm-verity / vbmeta），见 [[avb-verified-boot-corruption]]。\n\n## 待确认\n\n- 绑定的前置条件（是否必须插 SIM 卡、是否必须开启「查找设备」等）随 MIUI / HyperOS 版本与地区版本变化，待确认。\n- 单个账号的解锁配额（数量与周期）、是否额外要求小米社区等级或答题，官方政策会调整，以官方解锁页说明为准，待确认。\n- 部分运营商定制机、企业机或特定型号不支持自助解锁，待确认。\n- `fastboot flashing unlock` 与 `fastboot oem unlock` 在具体机型上的可用性差异待确认。",
+      "path": "wiki/howtos/fastboot-unlock-token-verify-failed.md"
+    },
+    {
+      "slug": "mtk-brom-vs-preloader-mode",
+      "title": "MTK BROM 与 Preloader 模式：进入方式、USB VCOM 驱动与刷机中途掉线",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "brom",
+        "preloader",
+        "driver",
+        "usb"
+      ],
+      "keywords": [
+        "BROM",
+        "Preloader",
+        "MediaTek USB Port",
+        "MTK USB VCOM 驱动",
+        "不识别",
+        "SP Flash Tool",
+        "刷机掉线"
+      ],
+      "symptom": "- 设备管理器里设备「一闪而过」：插线后出现 `MediaTek PreLoader USB VCOM Port`（或 `MediaTek USB Port`），一两秒后消失；\n- 或者完全**不识别**，显示为未知设备、带感叹号的设备；\n- SP Flash Tool 能连上，但刷到一半（下发 DA、写 preloader、写分区）突然断开，报连接/状态类错误，例如 [[mtk-spflash-send-da-fail-hash-mismatch]] 里的状态串，或 [[mtk-spflash-error-4032-4004-4008]] 中的握手失败。",
+      "cause": "- **两种模式本质不同**：BROM 是 SoC 内部固化的引导 ROM，即使 flash 里的引导已经损坏也依然存在，进入后长时间稳定在线，只跑 BROM 协议；Preloader 是 flash 里的第一级引导，上电后只存在很短时间，随即加载后续引导并重新枚举 USB 或直接断开——所以在 Preloader 窗口里刷机必然「中途掉线」。\n- **驱动问题**：`MediaTek USB VCOM` 系列驱动没装好、被系统更新覆盖，或旧版未签名驱动在 Windows 10/11 上被驱动签名强制拦下，会导致设备认成未知设备或状态不稳定。\n- **上电时序与供电**：先插线再按键、按早/按晚、USB Hub 或前置口供电不足、线材质量差，都会让设备在关键阶段掉线。",
+      "steps": "1. 装好 MTK USB VCOM 驱动：使用工具包或官方渠道提供的驱动安装程序；若旧驱动在 Windows 10/11 上装不上或报签名错误，临时禁用驱动签名强制后再安装，装完恢复。\n2. 打开设备管理器观察设备名：稳定出现 `MediaTek USB Port` 通常表示处于 BROM；只出现 `MediaTek PreLoader USB VCOM Port` 且很快消失，说明抓到的是 Preloader 窗口。设备名与 VID/PID 随驱动版本与机型而异，必要时用硬件 ID 判断。\n3. 规范进入 BROM：断开数据线 → 可拆电池机型取下电池 → 在 SP Flash Tool 里先点 `Download` 让工具进入等待 → 按住音量键（不同机型组合不同，见「待确认」）→ 接上数据线/电池。松手时机不对就断开重来。\n4. 优化链路：直插主板后置 USB 2.0 端口，不用 Hub 与前置口，换一根可靠数据线；在 **Download** 标签页把速度降为 **Full Speed**；在 Windows 电源选项里关闭「USB 选择性暂停」，并在设备管理器中取消该 USB 设备的「允许计算机关闭此设备以节约电源」。\n5. 若掉线发生在写入阶段，先按 [[mtk-spflash-error-4032-4004-4008]] 与 [[mtk-spflash-error-2004-2005-3004]] 排查固件包/DA 匹配，再回到供电与线材。\n6. 若设备始终只在 Preloader 窗口出现：尝试让工具在设备上电瞬间自动抓取（是否支持自动检测随工具版本而定），或改用能更早介入的操作顺序；仍无法稳定进入 BROM 时，确认该机型是否对 BROM 有额外限制，见 [[mtk-secure-boot-auth-file]]。\n7. 每次重试前都让设备彻底断电（取电池/断开线缆），不要在已掉线的状态下直接点 `Download`。",
+      "verify": "- 设备管理器中设备名稳定存在，不再一闪而过；\n- SP Flash Tool 能读出芯片信息并完整走完 DA 下载，全程不掉线；\n- 刷写结束后设备自动重启进入系统；\n- 连续两次刷写都能稳定复现成功，说明模式进入方式与驱动环境已可靠。",
+      "todo": "- 各具体机型进入 BROM 的按键组合、是否需要取电池、以及 BROM 的可见时间窗口，差异很大，需按机型确认。\n- 不同 MTK USB VCOM 驱动版本在 Windows 10/11 上的兼容性表现不一致，待确认。",
+      "body": "# MTK BROM 与 Preloader 模式：进入方式、USB VCOM 驱动与刷机中途掉线\n\n## 症状\n\n- 设备管理器里设备「一闪而过」：插线后出现 `MediaTek PreLoader USB VCOM Port`（或 `MediaTek USB Port`），一两秒后消失；\n- 或者完全**不识别**，显示为未知设备、带感叹号的设备；\n- SP Flash Tool 能连上，但刷到一半（下发 DA、写 preloader、写分区）突然断开，报连接/状态类错误，例如 [[mtk-spflash-send-da-fail-hash-mismatch]] 里的状态串，或 [[mtk-spflash-error-4032-4004-4008]] 中的握手失败。\n\n## 原因\n\n- **两种模式本质不同**：BROM 是 SoC 内部固化的引导 ROM，即使 flash 里的引导已经损坏也依然存在，进入后长时间稳定在线，只跑 BROM 协议；Preloader 是 flash 里的第一级引导，上电后只存在很短时间，随即加载后续引导并重新枚举 USB 或直接断开——所以在 Preloader 窗口里刷机必然「中途掉线」。\n- **驱动问题**：`MediaTek USB VCOM` 系列驱动没装好、被系统更新覆盖，或旧版未签名驱动在 Windows 10/11 上被驱动签名强制拦下，会导致设备认成未知设备或状态不稳定。\n- **上电时序与供电**：先插线再按键、按早/按晚、USB Hub 或前置口供电不足、线材质量差，都会让设备在关键阶段掉线。\n\n## 步骤\n\n1. 装好 MTK USB VCOM 驱动：使用工具包或官方渠道提供的驱动安装程序；若旧驱动在 Windows 10/11 上装不上或报签名错误，临时禁用驱动签名强制后再安装，装完恢复。\n2. 打开设备管理器观察设备名：稳定出现 `MediaTek USB Port` 通常表示处于 BROM；只出现 `MediaTek PreLoader USB VCOM Port` 且很快消失，说明抓到的是 Preloader 窗口。设备名与 VID/PID 随驱动版本与机型而异，必要时用硬件 ID 判断。\n3. 规范进入 BROM：断开数据线 → 可拆电池机型取下电池 → 在 SP Flash Tool 里先点 `Download` 让工具进入等待 → 按住音量键（不同机型组合不同，见「待确认」）→ 接上数据线/电池。松手时机不对就断开重来。\n4. 优化链路：直插主板后置 USB 2.0 端口，不用 Hub 与前置口，换一根可靠数据线；在 **Download** 标签页把速度降为 **Full Speed**；在 Windows 电源选项里关闭「USB 选择性暂停」，并在设备管理器中取消该 USB 设备的「允许计算机关闭此设备以节约电源」。\n5. 若掉线发生在写入阶段，先按 [[mtk-spflash-error-4032-4004-4008]] 与 [[mtk-spflash-error-2004-2005-3004]] 排查固件包/DA 匹配，再回到供电与线材。\n6. 若设备始终只在 Preloader 窗口出现：尝试让工具在设备上电瞬间自动抓取（是否支持自动检测随工具版本而定），或改用能更早介入的操作顺序；仍无法稳定进入 BROM 时，确认该机型是否对 BROM 有额外限制，见 [[mtk-secure-boot-auth-file]]。\n7. 每次重试前都让设备彻底断电（取电池/断开线缆），不要在已掉线的状态下直接点 `Download`。\n\n## 验证\n\n- 设备管理器中设备名稳定存在，不再一闪而过；\n- SP Flash Tool 能读出芯片信息并完整走完 DA 下载，全程不掉线；\n- 刷写结束后设备自动重启进入系统；\n- 连续两次刷写都能稳定复现成功，说明模式进入方式与驱动环境已可靠。\n\n## 待确认\n\n- 各具体机型进入 BROM 的按键组合、是否需要取电池、以及 BROM 的可见时间窗口，差异很大，需按机型确认。\n- 不同 MTK USB VCOM 驱动版本在 Windows 10/11 上的兼容性表现不一致，待确认。",
+      "path": "wiki/howtos/mtk-brom-vs-preloader-mode.md"
+    },
+    {
+      "slug": "mtk-secure-boot-auth-file",
+      "title": "MTK Secure Boot 与防回滚报错（S_DA_..._SECURE_BOOT）：auth 文件与小米机型刷机",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "secure-boot",
+        "auth",
+        "anti-rollback",
+        "刷机报错"
+      ],
+      "keywords": [
+        "S_DA_..._SECURE_BOOT",
+        "secure boot",
+        "auth 文件",
+        "SP Flash Tool",
+        "无法开机",
+        "防回滚"
+      ],
+      "symptom": "SP Flash Tool 在 DA 阶段或写 preloader 阶段失败，日志出现 `S_DA_..._SECURE_BOOT` 形式的状态串（前缀与后缀随 SoC 与工具版本不同，见文末「待确认」）：\n\n```text\nS_DA_..._SECURE_BOOT\n（前缀/后缀随 SOC 与工具版本不同）\n```\n\n伴随的典型表现：\n\n- 换了好几份固件包、好几个 DA 都一样报错，设备进不了系统（卡 logo、反复重启）；\n- 降级刷旧版固件时必报错，刷同版本或更新版本有时能正常（防回滚）；\n- 设备 bootloader 处于锁定状态，fastboot 解锁失败或解锁开关不可用，相关流程见 [[fastboot-unlock-failed]]。",
+      "cause": "- **Secure Boot Chain（SBC）开启**：BROM 只接受由厂商私钥签名的 DA 与镜像，SP Flash Tool 必须配合该机型对应的 auth 文件（认证文件）才能下发 DA。\n- **防回滚（anti-rollback）**：设备记录了可接受的最低固件版本等级，刷入更低版本会被拒绝，表现为安全启动类报错或握手直接失败。\n- **bootloader 锁定**：锁定时无法通过 fastboot 刷写第三方镜像，部分操作只能走官方认证刷机流程，或先按官方流程解锁。",
+      "steps": "1. 先确认要刷的固件版本不低于设备当前版本：优先刷与设备现版本相同或更新的官方固件，避免触发防回滚。\n2. 准备本机型/本 SoC 对应的 auth 文件。文件名与获取渠道随机型而定（常见如 `auth_sv5.auth`，待确认）；用错机型的 auth 一定失败。\n3. 在 SP Flash Tool 的 **Download** 标签页，分别设置好 `Download Agent`（官方 DA）与 `Authentication File`（auth 文件），再执行下载，参见 [[mtk-spflash-send-da-fail-hash-mismatch]]。\n4. 换官方固件包自带的 DA + auth 组合重试；若仍报 secure boot 类错误，说明 auth 与设备密钥不匹配，需要找到真正对应本机型的 auth，而不是反复换固件版本。\n5. 若 bootloader 处于锁定状态且需要解锁：按小米官方解锁流程操作（需要账号绑定与等待期，具体时长与政策待确认）；解锁失败参考 [[fastboot-unlock-failed]]。\n6. 保持链路稳定，避免把「掉线」误判成安全启动问题：USB 2.0 后置端口、可靠数据线、**Full Speed**、规范进入 BROM，见 [[mtk-brom-vs-preloader-mode]]。\n7. 不要尝试用改名、替换镜像签名或来源不明的「绕过工具」规避安全启动：既不可靠，也可能让设备进入更难恢复的状态。",
+      "verify": "- 日志中不再出现 secure boot 类状态串，DA 正常下发并完成写入，工具给出成功提示；\n- 设备自动重启进入系统，设置 → 关于手机 的版本号与刷入固件一致，且不低于原版本；\n- 若做过解锁，可在 fastboot 下查看解锁状态（具体命令随机型而异）；\n- 连续冷启动不卡 logo、不反复重启，基带与 IMEI（`*#06#`）正常。",
+      "todo": "- `S_DA_..._SECURE_BOOT` 的完整符号名（前缀/后缀，例如是否带额外的启用标记）随 SoC 与工具版本变化，待确认，不做臆测。\n- 小米各机型 auth 文件的命名规则、获取渠道与官方维修流程，待确认。\n- 小米解锁的具体等待期时长与政策，以及哪些 MTK 机型/芯片可以被现有手段绕过安全启动，均待确认。",
+      "body": "# MTK Secure Boot 与防回滚报错（S_DA_..._SECURE_BOOT）：auth 文件与小米机型刷机\n\n## 症状\n\nSP Flash Tool 在 DA 阶段或写 preloader 阶段失败，日志出现 `S_DA_..._SECURE_BOOT` 形式的状态串（前缀与后缀随 SoC 与工具版本不同，见文末「待确认」）：\n\n```text\nS_DA_..._SECURE_BOOT\n（前缀/后缀随 SOC 与工具版本不同）\n```\n\n伴随的典型表现：\n\n- 换了好几份固件包、好几个 DA 都一样报错，设备进不了系统（卡 logo、反复重启）；\n- 降级刷旧版固件时必报错，刷同版本或更新版本有时能正常（防回滚）；\n- 设备 bootloader 处于锁定状态，fastboot 解锁失败或解锁开关不可用，相关流程见 [[fastboot-unlock-failed]]。\n\n## 原因\n\n- **Secure Boot Chain（SBC）开启**：BROM 只接受由厂商私钥签名的 DA 与镜像，SP Flash Tool 必须配合该机型对应的 auth 文件（认证文件）才能下发 DA。\n- **防回滚（anti-rollback）**：设备记录了可接受的最低固件版本等级，刷入更低版本会被拒绝，表现为安全启动类报错或握手直接失败。\n- **bootloader 锁定**：锁定时无法通过 fastboot 刷写第三方镜像，部分操作只能走官方认证刷机流程，或先按官方流程解锁。\n\n## 步骤\n\n1. 先确认要刷的固件版本不低于设备当前版本：优先刷与设备现版本相同或更新的官方固件，避免触发防回滚。\n2. 准备本机型/本 SoC 对应的 auth 文件。文件名与获取渠道随机型而定（常见如 `auth_sv5.auth`，待确认）；用错机型的 auth 一定失败。\n3. 在 SP Flash Tool 的 **Download** 标签页，分别设置好 `Download Agent`（官方 DA）与 `Authentication File`（auth 文件），再执行下载，参见 [[mtk-spflash-send-da-fail-hash-mismatch]]。\n4. 换官方固件包自带的 DA + auth 组合重试；若仍报 secure boot 类错误，说明 auth 与设备密钥不匹配，需要找到真正对应本机型的 auth，而不是反复换固件版本。\n5. 若 bootloader 处于锁定状态且需要解锁：按小米官方解锁流程操作（需要账号绑定与等待期，具体时长与政策待确认）；解锁失败参考 [[fastboot-unlock-failed]]。\n6. 保持链路稳定，避免把「掉线」误判成安全启动问题：USB 2.0 后置端口、可靠数据线、**Full Speed**、规范进入 BROM，见 [[mtk-brom-vs-preloader-mode]]。\n7. 不要尝试用改名、替换镜像签名或来源不明的「绕过工具」规避安全启动：既不可靠，也可能让设备进入更难恢复的状态。\n\n## 验证\n\n- 日志中不再出现 secure boot 类状态串，DA 正常下发并完成写入，工具给出成功提示；\n- 设备自动重启进入系统，设置 → 关于手机 的版本号与刷入固件一致，且不低于原版本；\n- 若做过解锁，可在 fastboot 下查看解锁状态（具体命令随机型而异）；\n- 连续冷启动不卡 logo、不反复重启，基带与 IMEI（`*#06#`）正常。\n\n## 待确认\n\n- `S_DA_..._SECURE_BOOT` 的完整符号名（前缀/后缀，例如是否带额外的启用标记）随 SoC 与工具版本变化，待确认，不做臆测。\n- 小米各机型 auth 文件的命名规则、获取渠道与官方维修流程，待确认。\n- 小米解锁的具体等待期时长与政策，以及哪些 MTK 机型/芯片可以被现有手段绕过安全启动，均待确认。",
+      "path": "wiki/howtos/mtk-secure-boot-auth-file.md"
+    },
+    {
+      "slug": "mtk-spflash-error-2004-2005-3004",
+      "title": "SP Flash Tool 报错 2004/2005/3004：DA 下载与 NAND/eMMC 初始化失败",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "sp-flash-tool",
+        "emmc",
+        "nand",
+        "刷机报错"
+      ],
+      "keywords": [
+        "ERROR 2004",
+        "ERROR 2005",
+        "ERROR 3004",
+        "SP Flash Tool",
+        "不识别",
+        "无法开机"
+      ],
+      "symptom": "SP Flash Tool 在 `Downloading DA` 阶段或紧随其后的存储初始化阶段中断，日志出现 2004 / 2005 / 3004 之类的错误码：\n\n```text\nERROR: 2004\nERROR: 2005\nERROR: 3004\n```\n\n设备表现为不识别、卡 logo、无法开机；有的机型报错后 USB 设备会直接从设备管理器中消失。与握手/DRAM 阶段的报错（[[mtk-spflash-error-4032-4004-4008]]）不同，这类错误通常发生在工具已经连上设备、DA 已经开始跑之后。",
+      "cause": "- **DA 与设备存储类型不匹配**：2004 / 2005 这类错误来自 DA 阶段，是 DA 在初始化或识别存储（NAND 或 eMMC）时失败。给 eMMC 机型用了只支持 NAND 的老 DA（或反之）是最常见的原因。\n- **preloader 损坏或与芯片不匹配**：preloader 负责拉起后续引导并携带 EMI/存储参数；损坏或错版 preloader 会让 DA 拿不到正确的存储信息。\n- **存储本体故障**：eMMC/NAND 虚焊、坏块、供电异常时，存储初始化会稳定失败，换固件包、换 DA 都无效。",
+      "steps": "1. 先确认目标机型的存储类型（eMMC 还是 NAND）与所用 DA 的适用范围，优先使用官方固件包自带的 DA 与 scatter，参考 [[mtk-spflash-error-4032-4004-4008]] 的匹配原则。\n2. 重新解压或重新下载固件包，排除 preloader 文件损坏；确认 `scatter` 里 preloader 一项指向的文件确实存在。\n3. 在 **Download** 标签页只勾 `Download Only`，速度设为 **Full Speed**，用 USB 2.0 后置端口与可靠数据线重试；进入 BROM 的方式见 [[mtk-brom-vs-preloader-mode]]。\n4. 如果设备已经刷坏引导、反复报 2004 / 2005：先在 **Format** 标签页执行整片擦除（Erase Flash），或在 Download 页选 `Format All + Download`，刷入完整官方固件（必须含 preloader），之后再改回 `Download Only` 复刷一遍。注意格式化会清数据，部分机型会丢 IMEI/NVRAM。\n5. 若 3004 出现在写入/分区阶段：核对 scatter 的分区表与固件包是否同源，改用该机型当前版本的完整固件包（不要只单独刷某一个分区）。\n6. 换一个 SP Flash Tool 版本与官方 DA 组合重试，用于区分「工具/DA 兼容性问题」和「设备本身问题」。\n7. 若用多套官方包、多台电脑都能稳定复现同样错误，且设备在其它工具下读芯片信息也异常，则按硬件故障处理：检查 eMMC/NAND 供电与焊接，必要时重植或更换存储芯片。",
+      "verify": "- SP Flash Tool 走完全部进度并给出成功提示，设备自动重启进入系统；\n- 设置 → 关于手机，版本号与刷入固件一致；\n- 连续多次冷启动不卡 logo、不反复重启；\n- 若做过格式化，检查 `*#06#` 的 IMEI 以及 Wi-Fi、蓝牙、SIM 识别是否正常。",
+      "todo": "- 2004 / 2005 / 3004 在各版本 SP Flash Tool 与各 DA 中的官方符号名（如 `S_DA_NAND_*` / `S_DA_EMMC_*` 系列）并不一致，本文只按「DA 阶段的存储初始化/读写失败」归类，具体对应关系待确认。\n- 3004 是否在所有平台上都固定对应 eMMC 相关问题，待确认。",
+      "body": "# SP Flash Tool 报错 2004/2005/3004：DA 下载与 NAND/eMMC 初始化失败\n\n## 症状\n\nSP Flash Tool 在 `Downloading DA` 阶段或紧随其后的存储初始化阶段中断，日志出现 2004 / 2005 / 3004 之类的错误码：\n\n```text\nERROR: 2004\nERROR: 2005\nERROR: 3004\n```\n\n设备表现为不识别、卡 logo、无法开机；有的机型报错后 USB 设备会直接从设备管理器中消失。与握手/DRAM 阶段的报错（[[mtk-spflash-error-4032-4004-4008]]）不同，这类错误通常发生在工具已经连上设备、DA 已经开始跑之后。\n\n## 原因\n\n- **DA 与设备存储类型不匹配**：2004 / 2005 这类错误来自 DA 阶段，是 DA 在初始化或识别存储（NAND 或 eMMC）时失败。给 eMMC 机型用了只支持 NAND 的老 DA（或反之）是最常见的原因。\n- **preloader 损坏或与芯片不匹配**：preloader 负责拉起后续引导并携带 EMI/存储参数；损坏或错版 preloader 会让 DA 拿不到正确的存储信息。\n- **存储本体故障**：eMMC/NAND 虚焊、坏块、供电异常时，存储初始化会稳定失败，换固件包、换 DA 都无效。\n\n## 步骤\n\n1. 先确认目标机型的存储类型（eMMC 还是 NAND）与所用 DA 的适用范围，优先使用官方固件包自带的 DA 与 scatter，参考 [[mtk-spflash-error-4032-4004-4008]] 的匹配原则。\n2. 重新解压或重新下载固件包，排除 preloader 文件损坏；确认 `scatter` 里 preloader 一项指向的文件确实存在。\n3. 在 **Download** 标签页只勾 `Download Only`，速度设为 **Full Speed**，用 USB 2.0 后置端口与可靠数据线重试；进入 BROM 的方式见 [[mtk-brom-vs-preloader-mode]]。\n4. 如果设备已经刷坏引导、反复报 2004 / 2005：先在 **Format** 标签页执行整片擦除（Erase Flash），或在 Download 页选 `Format All + Download`，刷入完整官方固件（必须含 preloader），之后再改回 `Download Only` 复刷一遍。注意格式化会清数据，部分机型会丢 IMEI/NVRAM。\n5. 若 3004 出现在写入/分区阶段：核对 scatter 的分区表与固件包是否同源，改用该机型当前版本的完整固件包（不要只单独刷某一个分区）。\n6. 换一个 SP Flash Tool 版本与官方 DA 组合重试，用于区分「工具/DA 兼容性问题」和「设备本身问题」。\n7. 若用多套官方包、多台电脑都能稳定复现同样错误，且设备在其它工具下读芯片信息也异常，则按硬件故障处理：检查 eMMC/NAND 供电与焊接，必要时重植或更换存储芯片。\n\n## 验证\n\n- SP Flash Tool 走完全部进度并给出成功提示，设备自动重启进入系统；\n- 设置 → 关于手机，版本号与刷入固件一致；\n- 连续多次冷启动不卡 logo、不反复重启；\n- 若做过格式化，检查 `*#06#` 的 IMEI 以及 Wi-Fi、蓝牙、SIM 识别是否正常。\n\n## 待确认\n\n- 2004 / 2005 / 3004 在各版本 SP Flash Tool 与各 DA 中的官方符号名（如 `S_DA_NAND_*` / `S_DA_EMMC_*` 系列）并不一致，本文只按「DA 阶段的存储初始化/读写失败」归类，具体对应关系待确认。\n- 3004 是否在所有平台上都固定对应 eMMC 相关问题，待确认。",
+      "path": "wiki/howtos/mtk-spflash-error-2004-2005-3004.md"
+    },
+    {
+      "slug": "mtk-spflash-error-4032-4004-4008",
+      "title": "SP Flash Tool 报错 4032/4004/4008：BROM·DA 握手与存储不匹配",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "sp-flash-tool",
+        "brom",
+        "emmc",
+        "刷机报错"
+      ],
+      "keywords": [
+        "ERROR 4032",
+        "ERROR 4004",
+        "ERROR 4008",
+        "SP Flash Tool",
+        "无法开机",
+        "卡logo",
+        "不识别"
+      ],
+      "symptom": "在 SP Flash Tool 里点 `Download` 后，日志报以下几种错误之一，设备无法继续刷写、也开不了机（表现为卡 logo、反复重启或完全不亮）：\n\n```text\nBROM ERROR : S_FT_ENABLE_DRAM_FAIL (4032)\n[EMI] Enable DRAM failed!\n\nBROM ERROR : S_FT_DOWNLOAD_FAIL (4004)\n\nERROR 4008\n```\n\n- 4032：多数出现在刚插线、BROM/DA 握手阶段，进度条还没开始就中断，设备随即掉线。\n- 4004：多出现在下载（写入）过程中途失败。\n- 4008：多见于写入/校验阶段报错（官方符号名待确认，见文末）。\n\n设备管理器中可能显示为 `MediaTek USB Port`，或一闪而过的 `MediaTek PreLoader USB VCOM Port`，模式细节见 [[mtk-brom-vs-preloader-mode]]。",
+      "cause": "- **固件包与机型/芯片不匹配**：scatter 文件、preloader、DA（Download Agent）必须来自同一份对应机型、对应 SoC 的固件包。用错包或错 preloader，BROM 无法按正确的 EMI/DRAM 参数初始化 → 4032。\n- **DA 与平台不匹配或文件损坏**：DA 运行在 BROM 环境里，负责访问 eMMC/NAND 并写入；DA 版本过旧、被截断或与芯片不匹配时，握手成功但写入失败 → 4004 / 4008。\n- **供电、USB 链路，或设备并未真正停在 BROM**：劣质线、USB Hub、USB 3.0 端口、中途掉电，以及停留在 Preloader 模式（几秒后自动断开），都会让传输中断。",
+      "steps": "1. 先定位失败阶段：看日志是停在 `Downloading DA` 之前（握手/DRAM 初始化）、还是写入进度中途。前者优先排查固件包匹配与 DA，后者优先排查存储、供电与链路。\n2. 核对固件包：确认机型代号与固件完全一致，`scatter` 文件与包内 preloader、各分区镜像齐全（缺文件时 SP Flash Tool 会直接提示缺少文件）。\n3. 换 DA：在 SP Flash Tool 的 **Download** 标签页点 `Download Agent`，选择官方包/工具自带的 DA（常见为 `MTK_AllInOne_DA.bin`，视机型而定），不要混用其它机型的 DA。\n4. 在 **Download** 标签页确认 scatter 已正确加载、勾选 `Download Only`，并把速度从 High Speed 调为 **Full Speed** 后重试。\n5. 换链路：用质量可靠的数据线直插台式机主板后置 **USB 2.0** 端口，不用 Hub、不用机箱前置口；可拆卸电池的机型先取下电池，先点 `Download` 再上电池/插线；进入方式见 [[mtk-brom-vs-preloader-mode]]。\n6. 若 4032 反复出现：在 **Format** 标签页执行整片擦除（Erase Flash），或在 Download 页选择 `Format All + Download`，然后重刷同一份官方固件。注意格式化会清空全部数据，部分机型会丢 NVRAM/IMEI，务必先确认可以接受。\n7. 若 4004 / 4008 在写入阶段复现：重新解压或重新下载固件包以排除文件损坏，再刷一次；连续多次在同一分区失败时，应怀疑 eMMC/NAND 坏块或存储虚焊，按硬件问题处理。\n8. 全部方法无效后，换一台电脑（干净的 MTK USB VCOM 驱动环境）复现，用于区分主机环境问题与设备硬件问题。",
+      "verify": "刷写流程结束后，SP Flash Tool 日志出现完成提示（界面显示绿色对勾/成功字样，无残留红色 ERROR），设备自动重启进入系统。\n\n- 设置 → 关于手机，系统版本应与刚刷入的固件版本一致；\n- 拨号 `*#06#` 能读出 IMEI（若为空且做过格式化，说明 NVRAM 区域未恢复，见步骤 6 的提示）；\n- 连续冷启动 2–3 次不卡 logo、不反复重启；\n- 若只是修复「无法开机」，还应确认信号、Wi-Fi、蓝牙等基带相关功能正常。",
+      "todo": "- 4004 / 4008 在 SP Flash Tool 不同版本中的官方符号名不完全一致（4004 常被记为 `S_FT_DOWNLOAD_FAIL`，4008 常见与校验/回读相关），本文不保证符号名与具体版本一一对应，以实际日志为准。\n- `Format All + Download` 会对哪些具体机型永久丢失 IMEI/NVRAM，视机型与固件而定，待确认。",
+      "body": "# SP Flash Tool 报错 4032/4004/4008：BROM·DA 握手与存储不匹配\n\n## 症状\n\n在 SP Flash Tool 里点 `Download` 后，日志报以下几种错误之一，设备无法继续刷写、也开不了机（表现为卡 logo、反复重启或完全不亮）：\n\n```text\nBROM ERROR : S_FT_ENABLE_DRAM_FAIL (4032)\n[EMI] Enable DRAM failed!\n\nBROM ERROR : S_FT_DOWNLOAD_FAIL (4004)\n\nERROR 4008\n```\n\n- 4032：多数出现在刚插线、BROM/DA 握手阶段，进度条还没开始就中断，设备随即掉线。\n- 4004：多出现在下载（写入）过程中途失败。\n- 4008：多见于写入/校验阶段报错（官方符号名待确认，见文末）。\n\n设备管理器中可能显示为 `MediaTek USB Port`，或一闪而过的 `MediaTek PreLoader USB VCOM Port`，模式细节见 [[mtk-brom-vs-preloader-mode]]。\n\n## 原因\n\n- **固件包与机型/芯片不匹配**：scatter 文件、preloader、DA（Download Agent）必须来自同一份对应机型、对应 SoC 的固件包。用错包或错 preloader，BROM 无法按正确的 EMI/DRAM 参数初始化 → 4032。\n- **DA 与平台不匹配或文件损坏**：DA 运行在 BROM 环境里，负责访问 eMMC/NAND 并写入；DA 版本过旧、被截断或与芯片不匹配时，握手成功但写入失败 → 4004 / 4008。\n- **供电、USB 链路，或设备并未真正停在 BROM**：劣质线、USB Hub、USB 3.0 端口、中途掉电，以及停留在 Preloader 模式（几秒后自动断开），都会让传输中断。\n\n## 步骤\n\n1. 先定位失败阶段：看日志是停在 `Downloading DA` 之前（握手/DRAM 初始化）、还是写入进度中途。前者优先排查固件包匹配与 DA，后者优先排查存储、供电与链路。\n2. 核对固件包：确认机型代号与固件完全一致，`scatter` 文件与包内 preloader、各分区镜像齐全（缺文件时 SP Flash Tool 会直接提示缺少文件）。\n3. 换 DA：在 SP Flash Tool 的 **Download** 标签页点 `Download Agent`，选择官方包/工具自带的 DA（常见为 `MTK_AllInOne_DA.bin`，视机型而定），不要混用其它机型的 DA。\n4. 在 **Download** 标签页确认 scatter 已正确加载、勾选 `Download Only`，并把速度从 High Speed 调为 **Full Speed** 后重试。\n5. 换链路：用质量可靠的数据线直插台式机主板后置 **USB 2.0** 端口，不用 Hub、不用机箱前置口；可拆卸电池的机型先取下电池，先点 `Download` 再上电池/插线；进入方式见 [[mtk-brom-vs-preloader-mode]]。\n6. 若 4032 反复出现：在 **Format** 标签页执行整片擦除（Erase Flash），或在 Download 页选择 `Format All + Download`，然后重刷同一份官方固件。注意格式化会清空全部数据，部分机型会丢 NVRAM/IMEI，务必先确认可以接受。\n7. 若 4004 / 4008 在写入阶段复现：重新解压或重新下载固件包以排除文件损坏，再刷一次；连续多次在同一分区失败时，应怀疑 eMMC/NAND 坏块或存储虚焊，按硬件问题处理。\n8. 全部方法无效后，换一台电脑（干净的 MTK USB VCOM 驱动环境）复现，用于区分主机环境问题与设备硬件问题。\n\n## 验证\n\n刷写流程结束后，SP Flash Tool 日志出现完成提示（界面显示绿色对勾/成功字样，无残留红色 ERROR），设备自动重启进入系统。\n\n- 设置 → 关于手机，系统版本应与刚刷入的固件版本一致；\n- 拨号 `*#06#` 能读出 IMEI（若为空且做过格式化，说明 NVRAM 区域未恢复，见步骤 6 的提示）；\n- 连续冷启动 2–3 次不卡 logo、不反复重启；\n- 若只是修复「无法开机」，还应确认信号、Wi-Fi、蓝牙等基带相关功能正常。\n\n## 待确认\n\n- 4004 / 4008 在 SP Flash Tool 不同版本中的官方符号名不完全一致（4004 常被记为 `S_FT_DOWNLOAD_FAIL`，4008 常见与校验/回读相关），本文不保证符号名与具体版本一一对应，以实际日志为准。\n- `Format All + Download` 会对哪些具体机型永久丢失 IMEI/NVRAM，视机型与固件而定，待确认。",
+      "path": "wiki/howtos/mtk-spflash-error-4032-4004-4008.md"
+    },
+    {
+      "slug": "mtk-spflash-send-da-fail-hash-mismatch",
+      "title": "SP Flash Tool 报 STATUS_BROM_CMD_SEND_DA_FAIL / STATUS_DA_HASH_MISMATCH：DA 与 auth 文件不匹配",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "sp-flash-tool",
+        "download-agent",
+        "auth",
+        "刷机报错"
+      ],
+      "keywords": [
+        "STATUS_BROM_CMD_SEND_DA_FAIL",
+        "STATUS_DA_HASH_MISMATCH",
+        "Download Agent",
+        "SP Flash Tool",
+        "不识别",
+        "无法开机"
+      ],
+      "symptom": "工具在把 DA（Download Agent）下发给设备时失败，日志出现下面这类状态串，随后连接中断：\n\n```text\nSTATUS_BROM_CMD_SEND_DA_FAIL\nSTATUS_DA_HASH_MISMATCH\n```\n\n表现是：设备能短暂被识别（设备管理器出现 `MediaTek USB Port`），但马上掉线，根本进不到写入分区阶段；或者每次都在同一个位置失败，重试无效。",
+      "cause": "- **DA 与芯片/平台不匹配**：BROM 只接受与自身平台匹配、且能通过校验的 DA。错版 DA 会导致下发（SEND_DA）直接失败。\n- **DA 文件损坏或被改动**：哈希校验对不上（HASH_MISMATCH），常见于压缩包解压不全、文件被截断，或从不可靠渠道拿到的「魔改」DA。\n- **安全启动 / 认证要求**：开启 Secure Boot 的机型，BROM 会拒绝未带正确签名的 DA，必须配套 auth 文件，详见 [[mtk-secure-boot-auth-file]]。\n- **设备没真正停在 BROM**：处于 Preloader 模式或上电时序不对时，命令发出但设备已经跳走，也会表现为下发 DA 失败，见 [[mtk-brom-vs-preloader-mode]]。",
+      "steps": "1. 优先使用官方固件包/工具包内自带的 DA 与 scatter，不要用来路不明的「万能 DA」。\n2. 重新解压或重新下载固件包，排除 HASH_MISMATCH 由文件损坏引起（可用压缩包内原始文件大小/校验做对比）。\n3. 在 SP Flash Tool 的 **Download** 标签页检查 `Download Agent` 路径是否指向正确文件；若机型需要认证，在同一页设置 `Authentication File`，指向与机型/固件匹配的 auth 文件（常见文件名如 `auth_sv5.auth`，视机型而定）。\n4. 换一个 SP Flash Tool 版本重试：不同版本对 DA 下发的时序与超时处理不同，能帮助区分兼容性问题。\n5. 重建 BROM 环境：拔线、取下电池（可拆机型）、按住音量键；先点 `Download` 再上电池/插线，让工具在等待窗口内抓到设备。速度设为 **Full Speed**，换 USB 2.0 后置端口与可靠数据线。\n6. 若报 HASH_MISMATCH 且已确认文件完好，通常是安全启动在拒绝该 DA：改用与机型匹配的 auth 文件 + 官方 DA；症状不变则按 [[mtk-secure-boot-auth-file]] 处理。\n7. 以上都无效时，换一台电脑或重装 MTK USB VCOM 驱动后复现，以排除主机 USB 与驱动问题（[[mtk-brom-vs-preloader-mode]]）。",
+      "verify": "- 日志中不再出现这两个状态串，DA 下发完成并进入读/写分区阶段，最终给出成功提示；\n- 设备自动重启进入系统，设置 → 关于手机 的版本号与刷入固件一致；\n- 对需要 auth 文件的机型，配置好 auth 后能连续两次稳定刷写成功，说明 DA + auth 组合正确。",
+      "todo": "- 这两个状态串在不同 SP Flash Tool / DA 版本中的输出位置与拼写可能略有差异（大小写、前缀），以实际日志为准。\n- 各机型 auth 文件的命名规则与获取渠道不同，待确认。",
+      "body": "# SP Flash Tool 报 STATUS_BROM_CMD_SEND_DA_FAIL / STATUS_DA_HASH_MISMATCH：DA 与 auth 文件不匹配\n\n## 症状\n\n工具在把 DA（Download Agent）下发给设备时失败，日志出现下面这类状态串，随后连接中断：\n\n```text\nSTATUS_BROM_CMD_SEND_DA_FAIL\nSTATUS_DA_HASH_MISMATCH\n```\n\n表现是：设备能短暂被识别（设备管理器出现 `MediaTek USB Port`），但马上掉线，根本进不到写入分区阶段；或者每次都在同一个位置失败，重试无效。\n\n## 原因\n\n- **DA 与芯片/平台不匹配**：BROM 只接受与自身平台匹配、且能通过校验的 DA。错版 DA 会导致下发（SEND_DA）直接失败。\n- **DA 文件损坏或被改动**：哈希校验对不上（HASH_MISMATCH），常见于压缩包解压不全、文件被截断，或从不可靠渠道拿到的「魔改」DA。\n- **安全启动 / 认证要求**：开启 Secure Boot 的机型，BROM 会拒绝未带正确签名的 DA，必须配套 auth 文件，详见 [[mtk-secure-boot-auth-file]]。\n- **设备没真正停在 BROM**：处于 Preloader 模式或上电时序不对时，命令发出但设备已经跳走，也会表现为下发 DA 失败，见 [[mtk-brom-vs-preloader-mode]]。\n\n## 步骤\n\n1. 优先使用官方固件包/工具包内自带的 DA 与 scatter，不要用来路不明的「万能 DA」。\n2. 重新解压或重新下载固件包，排除 HASH_MISMATCH 由文件损坏引起（可用压缩包内原始文件大小/校验做对比）。\n3. 在 SP Flash Tool 的 **Download** 标签页检查 `Download Agent` 路径是否指向正确文件；若机型需要认证，在同一页设置 `Authentication File`，指向与机型/固件匹配的 auth 文件（常见文件名如 `auth_sv5.auth`，视机型而定）。\n4. 换一个 SP Flash Tool 版本重试：不同版本对 DA 下发的时序与超时处理不同，能帮助区分兼容性问题。\n5. 重建 BROM 环境：拔线、取下电池（可拆机型）、按住音量键；先点 `Download` 再上电池/插线，让工具在等待窗口内抓到设备。速度设为 **Full Speed**，换 USB 2.0 后置端口与可靠数据线。\n6. 若报 HASH_MISMATCH 且已确认文件完好，通常是安全启动在拒绝该 DA：改用与机型匹配的 auth 文件 + 官方 DA；症状不变则按 [[mtk-secure-boot-auth-file]] 处理。\n7. 以上都无效时，换一台电脑或重装 MTK USB VCOM 驱动后复现，以排除主机 USB 与驱动问题（[[mtk-brom-vs-preloader-mode]]）。\n\n## 验证\n\n- 日志中不再出现这两个状态串，DA 下发完成并进入读/写分区阶段，最终给出成功提示；\n- 设备自动重启进入系统，设置 → 关于手机 的版本号与刷入固件一致；\n- 对需要 auth 文件的机型，配置好 auth 后能连续两次稳定刷写成功，说明 DA + auth 组合正确。\n\n## 待确认\n\n- 这两个状态串在不同 SP Flash Tool / DA 版本中的输出位置与拼写可能略有差异（大小写、前缀），以实际日志为准。\n- 各机型 auth 文件的命名规则与获取渠道不同，待确认。",
+      "path": "wiki/howtos/mtk-spflash-send-da-fail-hash-mismatch.md"
+    },
+    {
+      "slug": "mtk-spflash-stuck-downloading-da",
+      "title": "MTK SP Flash Tool 卡在 Downloading DA 或停在 100%：格式化 + 下载恢复流程",
+      "platform": "mtk",
+      "category": "howtos",
+      "tags": [
+        "mtk",
+        "xiaomi",
+        "sp-flash-tool",
+        "format",
+        "recovery",
+        "刷机"
+      ],
+      "keywords": [
+        "Downloading DA",
+        "SP Flash Tool",
+        "卡在100%",
+        "无法开机",
+        "反复重启",
+        "Format All"
+      ],
+      "symptom": "- 点 `Download` 后日志停在 `Downloading DA` 不动，进度长时间无变化；\n- 或者进度走到 100% 后卡住，工具界面不结束，而设备已经重启或掉线；\n- 有时工具直接无响应，只能拔线，重试后仍然卡在同一位置。\n\n```text\nDownloading DA ...\n（长时间无进展）\n\nDownload 100%\n（工具卡住，设备已重启/掉线）\n```",
+      "cause": "- **DA 下发后卡住**：DA 需要被 BROM 接收、校验并执行；DA 与机型/平台不匹配、安全启动拒绝，或 USB 链路不稳时就会停在这一步，参见 [[mtk-spflash-send-da-fail-hash-mismatch]]。\n- **100% 后的停顿**：很多情况下这是工具在等待设备重启或做校验/回读，并不等于失败；但若设备已掉线，或分区表与存储有异常，就会永久卡住。\n- **旧数据与分区表冲突**：设备里存在损坏的引导，或残留的用户数据/加密分区（含 FRP）时，直接 `Download Only` 容易卡住，需要先格式化再写入。",
+      "steps": "1. 先在 100% 处多等一会儿（时长视机型与工具版本而定），观察设备是否自行重启进入系统；能正常开机就不必继续操作。\n2. 卡在 `Downloading DA` 时先拔线重来：核对固件包与 DA 是否为该机型的官方包（[[mtk-spflash-error-4032-4004-4008]]），并把速度设为 **Full Speed**、换 USB 2.0 后置端口与可靠数据线。\n3. 换环境复现：换一个 USB 端口、换一台电脑，排除主机 USB 供电与驱动问题（[[mtk-brom-vs-preloader-mode]]）。\n4. 走「格式化 + 下载」恢复流程：\n   1. 打开 **Format** 标签页执行整片擦除（Erase Flash），或在 **Download** 标签页选择 `Format All + Download`；\n   2. 用同一份完整官方固件包（scatter 必须同源）执行下载，让 preloader 与各分区一起重建；\n   3. 完成后把模式改回 `Download Only`，再刷一遍以确认可以重复成功。\n   ⚠️ 格式化会清空全部数据，部分机型会丢 NVRAM/IMEI，操作前确认可以接受（能备份就先备份）。\n5. 若工具提供擦 FRP、擦 NVRAM 之类的独立按钮，只在明确知道后果时才使用，不要为了「刷得进去」乱擦分区。\n6. 每次操作前都让设备重新进入 BROM（拔电池/按键），不要在掉线状态下直接重试。\n7. 换用另一个版本的 SP Flash Tool 复现，用于区分工具/DA 兼容性问题与设备硬件问题。\n8. 多份固件包、多台电脑、多个工具版本都卡在同一位置，且反复出现存储读写错误时，按硬件故障（eMMC/NAND 或供电）处理，见 [[mtk-spflash-error-2004-2005-3004]]。",
+      "verify": "- 日志出现完成/成功提示，设备自动重启进入系统；\n- 设置 → 关于手机 的版本号与刷入固件一致，连续冷启动多次不卡 logo、不反复重启；\n- 做过格式化的设备，检查 `*#06#` 的 IMEI、Wi-Fi、蓝牙、SIM 识别是否正常；\n- 用 `Download Only` 再刷一次仍能一次走完，说明问题是真正解决而非偶然通过。",
+      "todo": "- 100% 后停顿的官方行为（是否一定在等待设备重启/校验）随工具版本而异，待确认。\n- 哪些机型在 `Format All + Download` 后会丢 IMEI/NVRAM，视机型与固件而定，待确认。",
+      "body": "# MTK SP Flash Tool 卡在 Downloading DA 或停在 100%：格式化 + 下载恢复流程\n\n## 症状\n\n- 点 `Download` 后日志停在 `Downloading DA` 不动，进度长时间无变化；\n- 或者进度走到 100% 后卡住，工具界面不结束，而设备已经重启或掉线；\n- 有时工具直接无响应，只能拔线，重试后仍然卡在同一位置。\n\n```text\nDownloading DA ...\n（长时间无进展）\n\nDownload 100%\n（工具卡住，设备已重启/掉线）\n```\n\n## 原因\n\n- **DA 下发后卡住**：DA 需要被 BROM 接收、校验并执行；DA 与机型/平台不匹配、安全启动拒绝，或 USB 链路不稳时就会停在这一步，参见 [[mtk-spflash-send-da-fail-hash-mismatch]]。\n- **100% 后的停顿**：很多情况下这是工具在等待设备重启或做校验/回读，并不等于失败；但若设备已掉线，或分区表与存储有异常，就会永久卡住。\n- **旧数据与分区表冲突**：设备里存在损坏的引导，或残留的用户数据/加密分区（含 FRP）时，直接 `Download Only` 容易卡住，需要先格式化再写入。\n\n## 步骤\n\n1. 先在 100% 处多等一会儿（时长视机型与工具版本而定），观察设备是否自行重启进入系统；能正常开机就不必继续操作。\n2. 卡在 `Downloading DA` 时先拔线重来：核对固件包与 DA 是否为该机型的官方包（[[mtk-spflash-error-4032-4004-4008]]），并把速度设为 **Full Speed**、换 USB 2.0 后置端口与可靠数据线。\n3. 换环境复现：换一个 USB 端口、换一台电脑，排除主机 USB 供电与驱动问题（[[mtk-brom-vs-preloader-mode]]）。\n4. 走「格式化 + 下载」恢复流程：\n   1. 打开 **Format** 标签页执行整片擦除（Erase Flash），或在 **Download** 标签页选择 `Format All + Download`；\n   2. 用同一份完整官方固件包（scatter 必须同源）执行下载，让 preloader 与各分区一起重建；\n   3. 完成后把模式改回 `Download Only`，再刷一遍以确认可以重复成功。\n   ⚠️ 格式化会清空全部数据，部分机型会丢 NVRAM/IMEI，操作前确认可以接受（能备份就先备份）。\n5. 若工具提供擦 FRP、擦 NVRAM 之类的独立按钮，只在明确知道后果时才使用，不要为了「刷得进去」乱擦分区。\n6. 每次操作前都让设备重新进入 BROM（拔电池/按键），不要在掉线状态下直接重试。\n7. 换用另一个版本的 SP Flash Tool 复现，用于区分工具/DA 兼容性问题与设备硬件问题。\n8. 多份固件包、多台电脑、多个工具版本都卡在同一位置，且反复出现存储读写错误时，按硬件故障（eMMC/NAND 或供电）处理，见 [[mtk-spflash-error-2004-2005-3004]]。\n\n## 验证\n\n- 日志出现完成/成功提示，设备自动重启进入系统；\n- 设置 → 关于手机 的版本号与刷入固件一致，连续冷启动多次不卡 logo、不反复重启；\n- 做过格式化的设备，检查 `*#06#` 的 IMEI、Wi-Fi、蓝牙、SIM 识别是否正常；\n- 用 `Download Only` 再刷一次仍能一次走完，说明问题是真正解决而非偶然通过。\n\n## 待确认\n\n- 100% 后停顿的官方行为（是否一定在等待设备重启/校验）随工具版本而异，待确认。\n- 哪些机型在 `Format All + Download` 后会丢 IMEI/NVRAM，视机型与固件而定，待确认。",
+      "path": "wiki/howtos/mtk-spflash-stuck-downloading-da.md"
+    },
+    {
+      "slug": "miflash-flash-script-errors",
+      "title": "MiFlash 常见报错：couldn't find flash script / 发送配置参数失败 / 系统找不到指定的文件",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "miflash",
+        "flashing",
+        "windows"
+      ],
+      "keywords": [
+        "couldnt find flash script, 发送配置参数失败, 系统找不到指定的文件, The device is not in EDL mode, MiFlash 报错, 无法刷机"
+      ],
+      "symptom": "MiFlash 能打开、也能看到端口，但点刷机立刻弹出下列任一错误（示例）：\n\n```text\ncouldn't find flash script\n```\n\n```text\n发送配置参数失败\n```\n\n```text\n系统找不到指定的文件。\n```\n\n```text\nThe device is not in EDL mode\n```\n\n多数情况下进度条根本不启动，或者走到「正在发送配置参数」附近就中断，设备仍停在 9008。",
+      "cause": "- `couldn't find flash script`：MiFlash 里选的目录不是 ROM 的刷机脚本层。工具需要在所选目录下找到 `flash_all.bat` 一类的脚本（以及 `images` 等子目录）；常见错误是多选/少选了一层目录，或下载到的 tgz/zip 根本没解压。\n- `系统找不到指定的文件`：脚本引用的某个镜像/工具在包内不存在——解压不完整、被杀软删掉、路径含中文或空格、磁盘空间不足都会造成这种情况。\n- `发送配置参数失败`：与设备通信在配置/firehose 阶段中断，通常是 USB 链路、驱动、programmer 不匹配，或 COM 口被其他软件占用（协议侧细节见 [[qualcomm-sahara-firehose-error]]）。\n- `The device is not in EDL mode`：设备当前不是 9008 状态，或端口是 900E 之类的诊断口，MiFlash 无法识别（见 [[qualcomm-edl-9008-enter]]）。",
+      "steps": "1. **先做通用准备**：把 ROM 解压到纯英文、无空格、层级很浅的路径（如 `D:\\rom\\`），关闭杀软实时防护后重新解压一次，确保包完整；刷机时不要开其他刷机工具或串口软件。\n2. **处理 `couldn't find flash script`**：在 MiFlash 里把路径精确指到含 `flash_all.bat`（或对应刷机脚本）和 `images\\` 的那一层。注意既不要选进 `images` 子目录，也不要选到解开后多套一层的父目录。确认拿到的是 fastboot 线刷包（带脚本），而不是未解压的卡刷包。\n3. **处理 `系统找不到指定的文件`**：打开所选目录下的 `flash_all.bat`，看它引用了哪些文件名，逐个确认这些文件真实存在。缺失就重新下载/解压完整包；若 ROM 路径含中文或空格，改到纯英文短路径后重试。\n4. **处理 `发送配置参数失败`**：换原装数据线和主板后置 USB 2.0 口、去掉 Hub；按 [[qualcomm-edl-9008-enter]] 重新进 9008；使用官方 ROM 包内自带的 firehose programmer；仍失败则改用 QFIL 刷同一套镜像做交叉验证，判断是包的问题还是 MiFlash/端口的问题。\n5. **处理 `The device is not in EDL mode`**：打开设备管理器「端口 (COM 和 LPT)」，确认存在 `Qualcomm HS-USB QDLoader 9008 (COMx)`。没有就重新 `adb reboot edl` 或短接测试点；是 900E 就说明没进 EDL，不能继续刷。\n6. **换工具交叉验证**：MiFlash 反复失败时，用 QFIL 以 Flat Build 方式刷同一 ROM 的镜像（`rawprogram*.xml` + `patch*.xml`）。QFIL 能成功就说明包本身没问题，问题在 MiFlash 侧或目录/脚本层。\n7. **保留日志**：失败后不要立刻关窗口，先截图错误弹窗；MiFlash 会在 ROM 目录或临时目录留下日志（具体位置随版本不同），保留完整日志便于定位。",
+      "verify": "- MiFlash 进度条正常推进到 100%，状态显示刷机成功；\n- 设备自动重启并进入系统；设备管理器里 9008 端口消失，出现正常的 Android / MTP 设备；\n- 若进度走完但设备不开机或反复重启，见 [[qualcomm-qdl-mode-stuck-bootloop]]；若在写分区阶段报写入失败，见 [[qualcomm-emmc-ufs-flash-write-failure]]。",
+      "todo": "- 各 MiFlash 版本日志文件的确切存放路径；\n- 特定版本 `发送配置参数失败` 是否附带更具体的子错误码；\n- 各版本 MiFlash 对目录层级（能否直接选含 `flash_all.bat` 的目录）的具体要求是否有差异。",
+      "body": "# MiFlash 常见报错：couldn't find flash script / 发送配置参数失败 / 系统找不到指定的文件\n\n## 症状\n\nMiFlash 能打开、也能看到端口，但点刷机立刻弹出下列任一错误（示例）：\n\n```text\ncouldn't find flash script\n```\n\n```text\n发送配置参数失败\n```\n\n```text\n系统找不到指定的文件。\n```\n\n```text\nThe device is not in EDL mode\n```\n\n多数情况下进度条根本不启动，或者走到「正在发送配置参数」附近就中断，设备仍停在 9008。\n\n## 原因\n\n- `couldn't find flash script`：MiFlash 里选的目录不是 ROM 的刷机脚本层。工具需要在所选目录下找到 `flash_all.bat` 一类的脚本（以及 `images` 等子目录）；常见错误是多选/少选了一层目录，或下载到的 tgz/zip 根本没解压。\n- `系统找不到指定的文件`：脚本引用的某个镜像/工具在包内不存在——解压不完整、被杀软删掉、路径含中文或空格、磁盘空间不足都会造成这种情况。\n- `发送配置参数失败`：与设备通信在配置/firehose 阶段中断，通常是 USB 链路、驱动、programmer 不匹配，或 COM 口被其他软件占用（协议侧细节见 [[qualcomm-sahara-firehose-error]]）。\n- `The device is not in EDL mode`：设备当前不是 9008 状态，或端口是 900E 之类的诊断口，MiFlash 无法识别（见 [[qualcomm-edl-9008-enter]]）。\n\n## 步骤\n\n1. **先做通用准备**：把 ROM 解压到纯英文、无空格、层级很浅的路径（如 `D:\\rom\\`），关闭杀软实时防护后重新解压一次，确保包完整；刷机时不要开其他刷机工具或串口软件。\n2. **处理 `couldn't find flash script`**：在 MiFlash 里把路径精确指到含 `flash_all.bat`（或对应刷机脚本）和 `images\\` 的那一层。注意既不要选进 `images` 子目录，也不要选到解开后多套一层的父目录。确认拿到的是 fastboot 线刷包（带脚本），而不是未解压的卡刷包。\n3. **处理 `系统找不到指定的文件`**：打开所选目录下的 `flash_all.bat`，看它引用了哪些文件名，逐个确认这些文件真实存在。缺失就重新下载/解压完整包；若 ROM 路径含中文或空格，改到纯英文短路径后重试。\n4. **处理 `发送配置参数失败`**：换原装数据线和主板后置 USB 2.0 口、去掉 Hub；按 [[qualcomm-edl-9008-enter]] 重新进 9008；使用官方 ROM 包内自带的 firehose programmer；仍失败则改用 QFIL 刷同一套镜像做交叉验证，判断是包的问题还是 MiFlash/端口的问题。\n5. **处理 `The device is not in EDL mode`**：打开设备管理器「端口 (COM 和 LPT)」，确认存在 `Qualcomm HS-USB QDLoader 9008 (COMx)`。没有就重新 `adb reboot edl` 或短接测试点；是 900E 就说明没进 EDL，不能继续刷。\n6. **换工具交叉验证**：MiFlash 反复失败时，用 QFIL 以 Flat Build 方式刷同一 ROM 的镜像（`rawprogram*.xml` + `patch*.xml`）。QFIL 能成功就说明包本身没问题，问题在 MiFlash 侧或目录/脚本层。\n7. **保留日志**：失败后不要立刻关窗口，先截图错误弹窗；MiFlash 会在 ROM 目录或临时目录留下日志（具体位置随版本不同），保留完整日志便于定位。\n\n## 验证\n\n- MiFlash 进度条正常推进到 100%，状态显示刷机成功；\n- 设备自动重启并进入系统；设备管理器里 9008 端口消失，出现正常的 Android / MTP 设备；\n- 若进度走完但设备不开机或反复重启，见 [[qualcomm-qdl-mode-stuck-bootloop]]；若在写分区阶段报写入失败，见 [[qualcomm-emmc-ufs-flash-write-failure]]。\n\n## 待确认\n\n- 各 MiFlash 版本日志文件的确切存放路径；\n- 特定版本 `发送配置参数失败` 是否附带更具体的子错误码；\n- 各版本 MiFlash 对目录层级（能否直接选含 `flash_all.bat` 的目录）的具体要求是否有差异。",
+      "path": "wiki/howtos/miflash-flash-script-errors.md"
+    },
+    {
+      "slug": "qualcomm-edl-9008-enter",
+      "title": "高通 EDL（9008）模式进入方法与 Windows 驱动识别问题",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "edl",
+        "driver",
+        "windows"
+      ],
+      "keywords": [
+        "9008",
+        "QDLoader 9008",
+        "900E",
+        "adb reboot edl",
+        "短接测试点",
+        "不识别",
+        "无法进入EDL",
+        "Qualcomm HS-USB"
+      ],
+      "symptom": "设备黑屏、插上 USB 后电脑无反应，或设备管理器里出现的不是 EDL 端口；刷机工具（MiFlash / QFIL）里点 Refresh 看不到设备，或提示设备不在 EDL 模式。\n\n典型「设备管理器」状态（示例）：\n\n```text\n端口 (COM 和 LPT)\n  Qualcomm HS-USB QDLoader 9008 (COM5)      ← 正常，EDL，可刷机\n  Qualcomm HS-USB Diagnostics 900E (COM6)   ← 只是诊断口，MiFlash/QFIL 不认\n其他设备\n  QUSB__BULK                                ← 驱动没装好，系统没认成端口\nAndroid Phone\n  Android Composite ADB Interface           ← 只进了 adb，没进 EDL\n```\n\n命令侧常见表现：\n\n```text\nC:\\platform-tools> adb reboot edl\n\nC:\\platform-tools> adb devices\nList of devices attached\n（无输出，设备已进入 EDL 或已断链）\n```\n\n如果设备管理器只出现 `900E`、`Android` 或 `QUSB__BULK`，都属于「没有真正进入 EDL / 驱动没装好」，不能直接刷机。",
+      "cause": "- EDL（Emergency Download）是高通 SoC 由底层引导程序暴露的下载模式，在 Windows 上表现为 USB VID/PID 对应的 `Qualcomm HS-USB QDLoader 9008` 端口；MiFlash、QFIL 只认这个 9008 端口。\n- `900E` 是高通诊断（Diagnostics）口，常见于系统内切换到诊断模式、或已开机的设备；它**不是** EDL，用它刷机必然失败。\n- 驱动未安装或未正确安装时，Windows 会把设备归到「其他设备」，显示为 `QUSB__BULK` 之类的未知设备（具体名称随 Windows 版本和平台略有差异）。\n- 能否进入 EDL 取决于机型与 bootloader 策略：有的机型只听 `adb reboot edl`，有的必须短接测试点，零售机还可能直接拒绝本地进入 EDL。",
+      "steps": "1. **先确认端口状态**。打开「设备管理器 → 端口 (COM 和 LPT)」，必须在刷机前看到 `Qualcomm HS-USB QDLoader 9008 (COMx)`。看到 900E / Android / QUSB__BULK 时，先按下面第 2–5 步让设备进入并识别为 9008，不要继续刷机。\n2. **软件方式进 EDL**（优先，最省事）：\n   - 系统能正常开机且 adb 已授权：`adb reboot edl`；\n   - 能进 fastboot：试 `fastboot oem edl`（部分机型支持，不支持会直接返回错误）；\n   - 已 root：可用 `su -c \"reboot edl\"` 之类的等价命令。\n3. **短接测试点进 EDL**（系统进不去、adb 不可用时）：\n   - 拆机找到主板上的 EDL 测试点（通常成对、相邻，丝印可能是 EDL / TP / 两个小焊盘，具体位置随机型不同）；\n   - 用镊子或细导线短接两个测试点，保持短接的同时插入 USB 线，电脑认到 9008 后再松开；\n   - **不要凭猜测短接**：短错点可能烧毁主板。测试点位置以对应机型的点位图/拆机资料为准，找不到测试点的机型通常需要专用 EDL 夹具。\n4. **组合键进 EDL**：部分较老机型和工程机可尝试「同时按住音量上 + 音量下，再插入 USB 线」。新机型/零售机是否响应视 bootloader 策略而定，不生效时不要反复长按，直接走短接测试点。\n5. **安装/修复驱动**：\n   - 在设备管理器里右键那个未知设备（或 9008/900E）→「更新驱动程序」→「浏览我的电脑以查找驱动程序」→ 指向 MiFlash / QFIL 安装目录里的高通 USB 驱动目录，并勾选「包括子文件夹」；也可以「让我从计算机上的可用驱动程序列表中选取」→ 选择「端口 (COM 和 LPT)」→「从磁盘安装」→ 选该目录下的高通驱动 inf 文件（不同驱动包里的文件名不一样，以目录中实际存在的 inf 为准）；\n   - 若 Windows 提示驱动签名问题，选择继续安装；若系统直接拒绝安装，可在「高级启动」中临时禁用驱动程序强制签名，装完重启恢复（这一步会降低系统安全性，仅作最后手段）。\n6. **换物理链路再试**：用带数据传输能力的原装线，插主板后置 USB 2.0 口，去掉 USB Hub 和延长线。前置口、USB 3.x 口和劣质线是高通 9008 握手失败的常见诱因。\n7. **仍然只出现 900E**：说明设备当前不是 EDL 状态。重新执行第 2 步的命令或第 3 步的短接，直到设备管理器显示 9008；不要在 900E 状态下继续操作。\n8. **进 9008 后工具仍不识别**：关闭其他占用串口的软件（串口助手、别的刷机工具、手机助手），再在 MiFlash 里点 Refresh，或在 QFIL 里点 Select Port 选择对应 COM 口。",
+      "verify": "- 设备管理器中稳定存在 `Qualcomm HS-USB QDLoader 9008 (COMx)`，不闪断、不自动消失；\n- MiFlash 点 Refresh 能列出设备，QFIL 的 Select Port 能列出同一个 COM 口；\n- 开始刷机后日志能越过 Sahara 握手、进入写分区阶段（若卡在握手见 [[qualcomm-sahara-firehose-error]]，若工具报找不到脚本或设备不在 EDL 见 [[miflash-flash-script-errors]]）；\n- 刷写成功且设备自动重启、不再停留在 9008。若刷完后设备还是 9008 或反复重启，见 [[qualcomm-qdl-mode-stuck-bootloop]]。",
+      "todo": "- 各具体机型的 EDL 测试点位置与可用组合键；\n- 不同 Windows 11 版本对未签名驱动安装的具体策略差异；\n- 各版本 MiFlash / QFIL 自带驱动目录的准确路径与 inf 文件名。",
+      "body": "# 高通 EDL（9008）模式进入方法与 Windows 驱动识别问题\n\n## 症状\n\n设备黑屏、插上 USB 后电脑无反应，或设备管理器里出现的不是 EDL 端口；刷机工具（MiFlash / QFIL）里点 Refresh 看不到设备，或提示设备不在 EDL 模式。\n\n典型「设备管理器」状态（示例）：\n\n```text\n端口 (COM 和 LPT)\n  Qualcomm HS-USB QDLoader 9008 (COM5)      ← 正常，EDL，可刷机\n  Qualcomm HS-USB Diagnostics 900E (COM6)   ← 只是诊断口，MiFlash/QFIL 不认\n其他设备\n  QUSB__BULK                                ← 驱动没装好，系统没认成端口\nAndroid Phone\n  Android Composite ADB Interface           ← 只进了 adb，没进 EDL\n```\n\n命令侧常见表现：\n\n```text\nC:\\platform-tools> adb reboot edl\n\nC:\\platform-tools> adb devices\nList of devices attached\n（无输出，设备已进入 EDL 或已断链）\n```\n\n如果设备管理器只出现 `900E`、`Android` 或 `QUSB__BULK`，都属于「没有真正进入 EDL / 驱动没装好」，不能直接刷机。\n\n## 原因\n\n- EDL（Emergency Download）是高通 SoC 由底层引导程序暴露的下载模式，在 Windows 上表现为 USB VID/PID 对应的 `Qualcomm HS-USB QDLoader 9008` 端口；MiFlash、QFIL 只认这个 9008 端口。\n- `900E` 是高通诊断（Diagnostics）口，常见于系统内切换到诊断模式、或已开机的设备；它**不是** EDL，用它刷机必然失败。\n- 驱动未安装或未正确安装时，Windows 会把设备归到「其他设备」，显示为 `QUSB__BULK` 之类的未知设备（具体名称随 Windows 版本和平台略有差异）。\n- 能否进入 EDL 取决于机型与 bootloader 策略：有的机型只听 `adb reboot edl`，有的必须短接测试点，零售机还可能直接拒绝本地进入 EDL。\n\n## 步骤\n\n1. **先确认端口状态**。打开「设备管理器 → 端口 (COM 和 LPT)」，必须在刷机前看到 `Qualcomm HS-USB QDLoader 9008 (COMx)`。看到 900E / Android / QUSB__BULK 时，先按下面第 2–5 步让设备进入并识别为 9008，不要继续刷机。\n2. **软件方式进 EDL**（优先，最省事）：\n   - 系统能正常开机且 adb 已授权：`adb reboot edl`；\n   - 能进 fastboot：试 `fastboot oem edl`（部分机型支持，不支持会直接返回错误）；\n   - 已 root：可用 `su -c \"reboot edl\"` 之类的等价命令。\n3. **短接测试点进 EDL**（系统进不去、adb 不可用时）：\n   - 拆机找到主板上的 EDL 测试点（通常成对、相邻，丝印可能是 EDL / TP / 两个小焊盘，具体位置随机型不同）；\n   - 用镊子或细导线短接两个测试点，保持短接的同时插入 USB 线，电脑认到 9008 后再松开；\n   - **不要凭猜测短接**：短错点可能烧毁主板。测试点位置以对应机型的点位图/拆机资料为准，找不到测试点的机型通常需要专用 EDL 夹具。\n4. **组合键进 EDL**：部分较老机型和工程机可尝试「同时按住音量上 + 音量下，再插入 USB 线」。新机型/零售机是否响应视 bootloader 策略而定，不生效时不要反复长按，直接走短接测试点。\n5. **安装/修复驱动**：\n   - 在设备管理器里右键那个未知设备（或 9008/900E）→「更新驱动程序」→「浏览我的电脑以查找驱动程序」→ 指向 MiFlash / QFIL 安装目录里的高通 USB 驱动目录，并勾选「包括子文件夹」；也可以「让我从计算机上的可用驱动程序列表中选取」→ 选择「端口 (COM 和 LPT)」→「从磁盘安装」→ 选该目录下的高通驱动 inf 文件（不同驱动包里的文件名不一样，以目录中实际存在的 inf 为准）；\n   - 若 Windows 提示驱动签名问题，选择继续安装；若系统直接拒绝安装，可在「高级启动」中临时禁用驱动程序强制签名，装完重启恢复（这一步会降低系统安全性，仅作最后手段）。\n6. **换物理链路再试**：用带数据传输能力的原装线，插主板后置 USB 2.0 口，去掉 USB Hub 和延长线。前置口、USB 3.x 口和劣质线是高通 9008 握手失败的常见诱因。\n7. **仍然只出现 900E**：说明设备当前不是 EDL 状态。重新执行第 2 步的命令或第 3 步的短接，直到设备管理器显示 9008；不要在 900E 状态下继续操作。\n8. **进 9008 后工具仍不识别**：关闭其他占用串口的软件（串口助手、别的刷机工具、手机助手），再在 MiFlash 里点 Refresh，或在 QFIL 里点 Select Port 选择对应 COM 口。\n\n## 验证\n\n- 设备管理器中稳定存在 `Qualcomm HS-USB QDLoader 9008 (COMx)`，不闪断、不自动消失；\n- MiFlash 点 Refresh 能列出设备，QFIL 的 Select Port 能列出同一个 COM 口；\n- 开始刷机后日志能越过 Sahara 握手、进入写分区阶段（若卡在握手见 [[qualcomm-sahara-firehose-error]]，若工具报找不到脚本或设备不在 EDL 见 [[miflash-flash-script-errors]]）；\n- 刷写成功且设备自动重启、不再停留在 9008。若刷完后设备还是 9008 或反复重启，见 [[qualcomm-qdl-mode-stuck-bootloop]]。\n\n## 待确认\n\n- 各具体机型的 EDL 测试点位置与可用组合键；\n- 不同 Windows 11 版本对未签名驱动安装的具体策略差异；\n- 各版本 MiFlash / QFIL 自带驱动目录的准确路径与 inf 文件名。",
+      "path": "wiki/howtos/qualcomm-edl-9008-enter.md"
+    },
+    {
+      "slug": "qualcomm-emmc-ufs-flash-write-failure",
+      "title": "高通机型 eMMC/UFS 存储写入失败（Flash write failure / 存储读写错误）",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "emmc",
+        "ufs",
+        "storage"
+      ],
+      "keywords": [
+        "FAILED (remote: Flash write failure)",
+        "存储读写错误",
+        "eMMC 损坏",
+        "UFS",
+        "坏块",
+        "9008",
+        "分区表损坏"
+      ],
+      "symptom": "刷机过程能进入写分区阶段，但到某个分区就失败；或 fastboot 刷写时报远端写入失败：\n\n```text\nSending 'system' (1048576 KB)   OKAY\nWriting 'system'                FAILED (remote: Flash write failure)\nFinished. Total time: 12.345s\n```\n\nEDL 工具侧可能表现为：\n\n```text\nERROR: Failed to write to sector ...\n存储读写错误\n```\n\n其他常见表现：每次都在同一个分区或同一位置失败；刷完依旧无法开机、卡在 logo（见 [[qualcomm-qdl-mode-stuck-bootloop]]）；有时能读出分区但写不进去。",
+      "cause": "- eMMC/UFS 闪存存在坏块、寿命耗尽或颗粒/存储控制器损坏，写入操作返回错误。坏块常集中在写入频繁的 userdata 等分区，表现为「只有个别分区写失败」。\n- 分区表（GPT）损坏，或 ROM 的 `rawprogram*.xml` / `patch*.xml` 与设备实际分区布局不一致，导致按错误的起始扇区写入。\n- USB 链路或供电不稳导致写入过程中断，日志看起来也像写入失败——必须先排除线材/端口因素，再判定是存储问题。\n- 刷了非本机型/非本存储版本的 XML，造成越界写入。",
+      "steps": "1. **先排除链路问题**：换原装数据线、插主板后置 USB 2.0 口、去掉 Hub，保证供电稳定，重新进 9008 后重试一次。这一步没过之前不要下「颗粒坏了」的结论。\n2. **核对 ROM 与机型**：确认型号、存储容量/版本与 ROM 严格对应，不要混用其他机型或其他容量版本的 `rawprogram` / `patch` XML。\n3. **只补刷失败分区**：如果只有个别分区（如 userdata、cache）失败，在 fastboot 下单独 `fastboot flash <分区> <镜像>`；若是数据分区损坏，可先 `fastboot erase userdata` 再重刷（会清空用户数据）。**注意不要随意擦写 persist、modemst/fsg 等校准分区**。\n4. **需要重新分区的场景**：分区表损坏、GPT 与 XML 不匹配、或刷完仍读不出系统分区时，必须走「重新分区/全盘刷写」流程——使用 ROM 自带的 `rawprogram*.xml` 与 `patch*.xml`，在 QFIL 中启用与「下载前擦除全部」相关的选项（不同版本名称不同，如 Erase All Before Download 一类），或使用 MiFlash 的全刷脚本。\n5. **重新分区的风险提示**：该操作会清除设备上的全部数据，包括 persist 等校准分区内容。执行前尽量确认是否有本机 persist 备份；没有备份时，指纹/传感器校准在擦除后无法通过刷机恢复（详见 [[qualcomm-qdl-mode-stuck-bootloop]]）。\n6. **重刷后仍在同一位置写失败**：说明问题很可能在存储侧。可多次重复写同一分区观察是否稳定复现；用高通侧工具读取存储信息/自检（具体菜单名随工具版本不同），或换个 EDL 工具再验证一次。\n7. **判定颗粒故障后的处理**：若「能读不能写」或同一扇区反复失败，基本可判定为存储颗粒或存储控制器故障，普通刷机无法修复，需要更换主板/存储芯片（维修级操作，需专业设备）。",
+      "verify": "- 重新刷写同一分区不再返回 `FAILED (remote: Flash write failure)`，工具校验阶段无报错；\n- 设备能正常开机进入系统，设置里显示的存储容量正确；\n- 在系统内做一次大文件写入/删除测试（拷入大文件再删除），无掉盘、无卡死、无重新枚举；\n- 冷启动/重启两次以上，系统仍能正常进入，说明写入内容已稳定落盘。",
+      "todo": "- 各机型存储颗粒型号与是否可单独更换；\n- 各工具做坏块检测/存储自检的确切菜单路径与输出含义；\n- 「能读不能写」在多大范围内可稳定判定为硬件故障（是否还存在固件层的可能原因）。",
+      "body": "# 高通机型 eMMC/UFS 存储写入失败（Flash write failure / 存储读写错误）\n\n## 症状\n\n刷机过程能进入写分区阶段，但到某个分区就失败；或 fastboot 刷写时报远端写入失败：\n\n```text\nSending 'system' (1048576 KB)   OKAY\nWriting 'system'                FAILED (remote: Flash write failure)\nFinished. Total time: 12.345s\n```\n\nEDL 工具侧可能表现为：\n\n```text\nERROR: Failed to write to sector ...\n存储读写错误\n```\n\n其他常见表现：每次都在同一个分区或同一位置失败；刷完依旧无法开机、卡在 logo（见 [[qualcomm-qdl-mode-stuck-bootloop]]）；有时能读出分区但写不进去。\n\n## 原因\n\n- eMMC/UFS 闪存存在坏块、寿命耗尽或颗粒/存储控制器损坏，写入操作返回错误。坏块常集中在写入频繁的 userdata 等分区，表现为「只有个别分区写失败」。\n- 分区表（GPT）损坏，或 ROM 的 `rawprogram*.xml` / `patch*.xml` 与设备实际分区布局不一致，导致按错误的起始扇区写入。\n- USB 链路或供电不稳导致写入过程中断，日志看起来也像写入失败——必须先排除线材/端口因素，再判定是存储问题。\n- 刷了非本机型/非本存储版本的 XML，造成越界写入。\n\n## 步骤\n\n1. **先排除链路问题**：换原装数据线、插主板后置 USB 2.0 口、去掉 Hub，保证供电稳定，重新进 9008 后重试一次。这一步没过之前不要下「颗粒坏了」的结论。\n2. **核对 ROM 与机型**：确认型号、存储容量/版本与 ROM 严格对应，不要混用其他机型或其他容量版本的 `rawprogram` / `patch` XML。\n3. **只补刷失败分区**：如果只有个别分区（如 userdata、cache）失败，在 fastboot 下单独 `fastboot flash <分区> <镜像>`；若是数据分区损坏，可先 `fastboot erase userdata` 再重刷（会清空用户数据）。**注意不要随意擦写 persist、modemst/fsg 等校准分区**。\n4. **需要重新分区的场景**：分区表损坏、GPT 与 XML 不匹配、或刷完仍读不出系统分区时，必须走「重新分区/全盘刷写」流程——使用 ROM 自带的 `rawprogram*.xml` 与 `patch*.xml`，在 QFIL 中启用与「下载前擦除全部」相关的选项（不同版本名称不同，如 Erase All Before Download 一类），或使用 MiFlash 的全刷脚本。\n5. **重新分区的风险提示**：该操作会清除设备上的全部数据，包括 persist 等校准分区内容。执行前尽量确认是否有本机 persist 备份；没有备份时，指纹/传感器校准在擦除后无法通过刷机恢复（详见 [[qualcomm-qdl-mode-stuck-bootloop]]）。\n6. **重刷后仍在同一位置写失败**：说明问题很可能在存储侧。可多次重复写同一分区观察是否稳定复现；用高通侧工具读取存储信息/自检（具体菜单名随工具版本不同），或换个 EDL 工具再验证一次。\n7. **判定颗粒故障后的处理**：若「能读不能写」或同一扇区反复失败，基本可判定为存储颗粒或存储控制器故障，普通刷机无法修复，需要更换主板/存储芯片（维修级操作，需专业设备）。\n\n## 验证\n\n- 重新刷写同一分区不再返回 `FAILED (remote: Flash write failure)`，工具校验阶段无报错；\n- 设备能正常开机进入系统，设置里显示的存储容量正确；\n- 在系统内做一次大文件写入/删除测试（拷入大文件再删除），无掉盘、无卡死、无重新枚举；\n- 冷启动/重启两次以上，系统仍能正常进入，说明写入内容已稳定落盘。\n\n## 待确认\n\n- 各机型存储颗粒型号与是否可单独更换；\n- 各工具做坏块检测/存储自检的确切菜单路径与输出含义；\n- 「能读不能写」在多大范围内可稳定判定为硬件故障（是否还存在固件层的可能原因）。",
+      "path": "wiki/howtos/qualcomm-emmc-ufs-flash-write-failure.md"
+    },
+    {
+      "slug": "qualcomm-qdl-mode-stuck-bootloop",
+      "title": "高通机型刷机后卡在 QDL/9008 或反复重启的恢复",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "qdl",
+        "bootloop",
+        "persist"
+      ],
+      "keywords": [
+        "卡在9008",
+        "QDL模式",
+        "重启循环",
+        "刷机后无法开机",
+        "persist 分区",
+        "modem 分区",
+        "不识别"
+      ],
+      "symptom": "两种典型表现：\n\n其一，刷机工具显示完成，但设备始终黑屏，插上电脑后一直停留在下载模式：\n\n```text\n端口 (COM 和 LPT)\n  Qualcomm HS-USB QDLoader 9008 (COM5)\n```\n\n设备不会自己退出 9008，也没有开机电流变化。\n\n其二，设备能亮屏但进不去系统：\n\n```text\n开机出现品牌 logo → 黑屏 → 自动重启 → 循环\n```\n\n有时伴随「能进 recovery 但进不了系统」「解锁提示 unlocked 后卡住」「设置里基带版本为空、无信号」等。",
+      "cause": "- 刷入的固件不完整或与机型不匹配，尤其是引导链相关分区缺失/错误时，设备在早期引导阶段就失败并回落为 EDL/QDL 模式。\n- 分区表或分区内容与设备实际布局不一致，或只补刷了部分镜像，导致引导校验不通过。\n- 刷写中途断电、掉线，造成部分分区只写了一半（日志里往往能看到写失败，见 [[qualcomm-emmc-ufs-flash-write-failure]]）。\n- persist、modemst/fsg 等校准分区被覆盖或擦除：轻则指纹/传感器失效、基带异常，重则影响开机流程的完整性。",
+      "steps": "1. **先让设备稳定停在 9008**，不要反复拔插和乱按组合键。进入方法与端口确认见 [[qualcomm-edl-9008-enter]]。\n2. **做一次完整全量刷写**：使用与机型严格对应的官方线刷包，不要只补刷单个分区。刷写全程保证供电与线材稳定，中途不要拔线、不要切 USB 口。\n3. **检查引导链是否漏刷**：不同平台的分区名不同（以 ROM 内 `rawprogram*.xml` / `patch*.xml` 实际列出的分区为准），确认该包要求的全部引导类分区都已写入，且 `patch` XML 中的分区与设备 GPT 对应。\n4. **仍然回落 9008 时考虑重新分区**：分区表损坏或与 ROM 不匹配时，需要走重新分区/全盘刷写流程，方法与风险见 [[qualcomm-emmc-ufs-flash-write-failure]]。\n5. **刷完不要急着反复重启**：首次开机可能较慢，给它足够时间。若确实反复重启，重新进 fastboot/EDL 完整刷一次，并抓取完整日志，确认没有隐藏的写失败或超时。\n6. **persist 分区的正确做法**：只恢复**本机自己**的 persist 备份。没有备份时，绝对不要用其他机器的 persist 镜像覆盖，否则指纹/传感器校准数据永久丢失，刷机无法恢复。官方全刷包里是否包含可用的 persist 镜像视具体 ROM 而定，不确定时不要刷该分区。\n7. **modem / 基带问题**：若刷完能进系统但无信号、设置里基带版本为空，用本机对应 ROM 里的 modem 类镜像重新刷入（不同平台文件名不同，如 `modem` 分区镜像、`NON-HLOS.bin` 一类）。若 modemst/fsg 校准分区已丢失或被写坏，普通刷机无法重新生成，需要专业工具或官方售后处理。\n8. **锁与权限问题**：fastboot 被锁或无法解锁会导致刷写被拒，参见 [[fastboot-unlock-failed]]；安全启动机型在 EDL 下被认证拦截时参见 [[qualcomm-secure-boot-nop-sig-tag]]。",
+      "verify": "- 设备不再被枚举为 9008，设备管理器里出现正常的 Android / MTP 设备；\n- 屏幕能点亮并进入系统，首次开机时间明显长于平时属正常；\n- 连续重启两次以上不再进入循环，也不会再回落 9008；\n- 设置中能看到非空的基带版本，插卡后能识别信号；指纹、传感器等功能正常；\n- `adb devices` 能列出设备并正常授权。",
+      "todo": "- 不同平台（是否有独立 xbl/abl 等分区、是否 A/B 分区）对应的最小可启动分区清单；\n- 官方全刷包中 persist 镜像到底是有效校准数据还是空占位，随机型和 ROM 而异；\n- modemst/fsg 校准数据在何种条件下可由官方工具重新生成。",
+      "body": "# 高通机型刷机后卡在 QDL/9008 或反复重启的恢复\n\n## 症状\n\n两种典型表现：\n\n其一，刷机工具显示完成，但设备始终黑屏，插上电脑后一直停留在下载模式：\n\n```text\n端口 (COM 和 LPT)\n  Qualcomm HS-USB QDLoader 9008 (COM5)\n```\n\n设备不会自己退出 9008，也没有开机电流变化。\n\n其二，设备能亮屏但进不去系统：\n\n```text\n开机出现品牌 logo → 黑屏 → 自动重启 → 循环\n```\n\n有时伴随「能进 recovery 但进不了系统」「解锁提示 unlocked 后卡住」「设置里基带版本为空、无信号」等。\n\n## 原因\n\n- 刷入的固件不完整或与机型不匹配，尤其是引导链相关分区缺失/错误时，设备在早期引导阶段就失败并回落为 EDL/QDL 模式。\n- 分区表或分区内容与设备实际布局不一致，或只补刷了部分镜像，导致引导校验不通过。\n- 刷写中途断电、掉线，造成部分分区只写了一半（日志里往往能看到写失败，见 [[qualcomm-emmc-ufs-flash-write-failure]]）。\n- persist、modemst/fsg 等校准分区被覆盖或擦除：轻则指纹/传感器失效、基带异常，重则影响开机流程的完整性。\n\n## 步骤\n\n1. **先让设备稳定停在 9008**，不要反复拔插和乱按组合键。进入方法与端口确认见 [[qualcomm-edl-9008-enter]]。\n2. **做一次完整全量刷写**：使用与机型严格对应的官方线刷包，不要只补刷单个分区。刷写全程保证供电与线材稳定，中途不要拔线、不要切 USB 口。\n3. **检查引导链是否漏刷**：不同平台的分区名不同（以 ROM 内 `rawprogram*.xml` / `patch*.xml` 实际列出的分区为准），确认该包要求的全部引导类分区都已写入，且 `patch` XML 中的分区与设备 GPT 对应。\n4. **仍然回落 9008 时考虑重新分区**：分区表损坏或与 ROM 不匹配时，需要走重新分区/全盘刷写流程，方法与风险见 [[qualcomm-emmc-ufs-flash-write-failure]]。\n5. **刷完不要急着反复重启**：首次开机可能较慢，给它足够时间。若确实反复重启，重新进 fastboot/EDL 完整刷一次，并抓取完整日志，确认没有隐藏的写失败或超时。\n6. **persist 分区的正确做法**：只恢复**本机自己**的 persist 备份。没有备份时，绝对不要用其他机器的 persist 镜像覆盖，否则指纹/传感器校准数据永久丢失，刷机无法恢复。官方全刷包里是否包含可用的 persist 镜像视具体 ROM 而定，不确定时不要刷该分区。\n7. **modem / 基带问题**：若刷完能进系统但无信号、设置里基带版本为空，用本机对应 ROM 里的 modem 类镜像重新刷入（不同平台文件名不同，如 `modem` 分区镜像、`NON-HLOS.bin` 一类）。若 modemst/fsg 校准分区已丢失或被写坏，普通刷机无法重新生成，需要专业工具或官方售后处理。\n8. **锁与权限问题**：fastboot 被锁或无法解锁会导致刷写被拒，参见 [[fastboot-unlock-failed]]；安全启动机型在 EDL 下被认证拦截时参见 [[qualcomm-secure-boot-nop-sig-tag]]。\n\n## 验证\n\n- 设备不再被枚举为 9008，设备管理器里出现正常的 Android / MTP 设备；\n- 屏幕能点亮并进入系统，首次开机时间明显长于平时属正常；\n- 连续重启两次以上不再进入循环，也不会再回落 9008；\n- 设置中能看到非空的基带版本，插卡后能识别信号；指纹、传感器等功能正常；\n- `adb devices` 能列出设备并正常授权。\n\n## 待确认\n\n- 不同平台（是否有独立 xbl/abl 等分区、是否 A/B 分区）对应的最小可启动分区清单；\n- 官方全刷包中 persist 镜像到底是有效校准数据还是空占位，随机型和 ROM 而异；\n- modemst/fsg 校准数据在何种条件下可由官方工具重新生成。",
+      "path": "wiki/howtos/qualcomm-qdl-mode-stuck-bootloop.md"
+    },
+    {
+      "slug": "qualcomm-sahara-firehose-error",
+      "title": "高通 Sahara / Firehose 协议报错（Sahara Fail / Failed to get sahara mode）",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "sahara",
+        "firehose",
+        "qfil"
+      ],
+      "keywords": [
+        "Sahara Fail",
+        "Firehose Fail",
+        "Failed to get sahara mode",
+        "Invalid Firehose programmer",
+        "刷机失败",
+        "9008"
+      ],
+      "symptom": "设备已进入 9008，工具也能看到端口，但一点 Download / 刷机就报协议类错误，进度条根本不动。典型日志（示例，实际措辞随工具与版本略有差异）：\n\n```text\nStart flashing...\nSend Sahara image ...\nERROR: Sahara Fail\n```\n\n```text\nERROR: Failed to get sahara mode!!\n```\n\n```text\nERROR: Invalid Firehose programmer\n```\n\n```text\nSend Firehose image ...\nERROR: Firehose Fail\n```\n\n共同特征是：设备停在 9008 不消失，工具反复重试握手，或握手几秒后设备从设备管理器里掉线再重新出现。",
+      "cause": "- Sahara 是高通 PBL 与主机之间的握手协议：主机必须先发送一个与 SoC 匹配、且签名被设备接受的 firehose programmer（`prog_firehose_*.elf` 一类文件），设备才会进入后续的镜像传输阶段。握手阶段谈崩就报 `Sahara Fail` / `Failed to get sahara mode`。\n- firehose programmer 与机型/SoC/DDR 不匹配，或文件本身损坏、被换名、被其他 ROM 的文件覆盖，会直接报 `Invalid Firehose programmer` 或 `Firehose Fail`。\n- 安全启动机型只接受 OEM 签名的 programmer，未签名/签名不符的会在认证环节被拒（日志里常伴随认证相关文字，见 [[qualcomm-secure-boot-nop-sig-tag]]）。\n- USB 链路不稳定（劣质线、前置口、USB Hub、供电不足）或驱动异常，同样表现为握手超时/掉线，看起来就像协议错误。\n- COM 口被占用：同时开着另一个 QFIL / MiFlash / 串口助手，导致本次连接打不开端口或周期性断开。",
+      "steps": "1. **只留一个工具**。关闭 MiFlash、QFIL、串口助手、手机助手等所有可能占用 COM 口的程序，然后重新打开要用的那一个。\n2. **重建连接**。拔线，按 [[qualcomm-edl-9008-enter]] 重新进入 9008（`adb reboot edl` 或短接测试点），确认设备管理器里是 `Qualcomm HS-USB QDLoader 9008`。\n3. **换物理链路**。用可靠数据线接主板后置 USB 2.0 口，去掉 Hub 和延长线。这一步能排掉相当一部分「假协议错误」。\n4. **对齐 programmer**。使用与机型、SoC 严格对应的官方 ROM 里自带的 firehose 文件，不要把别的机型/别的 ROM 的 `prog_firehose_*` 混进来。\n5. **QFIL 操作顺序**：Select Port 选 9008 端口 → Build Type 选 Flat Build → Programmer Path 指到 ROM 内的 firehose elf → Load XML 选 `rawprogram*.xml` 与 `patch*.xml` → Download。路径尽量短、纯英文、无空格。\n6. **`Invalid Firehose programmer` 专项处理**：重新完整解压 ROM（解压中断、杀软拦截 elf 都会造成文件损坏），关闭杀软实时防护后再解压一次；仍报错就换官方完整包。\n7. **`Failed to get sahara mode` 专项处理**：多半是设备没真正进 EDL 或握手中途掉线。每次失败后拔线重插、重新进入 9008，再重试 2–3 次；连续失败就换 USB 口、换线，而不是无脑点重试。\n8. **交叉验证**。MiFlash 失败时改用 QFIL 刷同一套镜像，或反之；能定位是 ROM 包的问题还是工具/端口的问题。\n9. **确认是安全启动拦截**。如果多套官方 programmer 都在认证阶段被拒，不要再反复尝试，改走官方授权刷机流程或售后（见 [[qualcomm-secure-boot-nop-sig-tag]]）。",
+      "verify": "- 日志越过 Sahara 握手，进入 firehose 阶段，并出现逐个分区的写入条目，全程无 `ERROR`；\n- 工具状态栏出现成功/完成提示（不同版本措辞不同，例如 Download Succeed / Finish Download 之类）；\n- 设备自动重启，设备管理器里的 9008 端口消失，出现正常的 Android / MTP 设备；\n- 若日志显示写分区阶段才失败（而不是握手），问题已转到存储侧，见 [[qualcomm-emmc-ufs-flash-write-failure]]。",
+      "todo": "- 各机型/SoC 对应的 firehose programmer 准确文件名与校验值；\n- 较新平台是否必须走官方授权工具才能完成 Sahara 认证；\n- 不同版本 QFIL / MiFlash 对这些报错的附加错误码。",
+      "body": "# 高通 Sahara / Firehose 协议报错（Sahara Fail / Failed to get sahara mode）\n\n## 症状\n\n设备已进入 9008，工具也能看到端口，但一点 Download / 刷机就报协议类错误，进度条根本不动。典型日志（示例，实际措辞随工具与版本略有差异）：\n\n```text\nStart flashing...\nSend Sahara image ...\nERROR: Sahara Fail\n```\n\n```text\nERROR: Failed to get sahara mode!!\n```\n\n```text\nERROR: Invalid Firehose programmer\n```\n\n```text\nSend Firehose image ...\nERROR: Firehose Fail\n```\n\n共同特征是：设备停在 9008 不消失，工具反复重试握手，或握手几秒后设备从设备管理器里掉线再重新出现。\n\n## 原因\n\n- Sahara 是高通 PBL 与主机之间的握手协议：主机必须先发送一个与 SoC 匹配、且签名被设备接受的 firehose programmer（`prog_firehose_*.elf` 一类文件），设备才会进入后续的镜像传输阶段。握手阶段谈崩就报 `Sahara Fail` / `Failed to get sahara mode`。\n- firehose programmer 与机型/SoC/DDR 不匹配，或文件本身损坏、被换名、被其他 ROM 的文件覆盖，会直接报 `Invalid Firehose programmer` 或 `Firehose Fail`。\n- 安全启动机型只接受 OEM 签名的 programmer，未签名/签名不符的会在认证环节被拒（日志里常伴随认证相关文字，见 [[qualcomm-secure-boot-nop-sig-tag]]）。\n- USB 链路不稳定（劣质线、前置口、USB Hub、供电不足）或驱动异常，同样表现为握手超时/掉线，看起来就像协议错误。\n- COM 口被占用：同时开着另一个 QFIL / MiFlash / 串口助手，导致本次连接打不开端口或周期性断开。\n\n## 步骤\n\n1. **只留一个工具**。关闭 MiFlash、QFIL、串口助手、手机助手等所有可能占用 COM 口的程序，然后重新打开要用的那一个。\n2. **重建连接**。拔线，按 [[qualcomm-edl-9008-enter]] 重新进入 9008（`adb reboot edl` 或短接测试点），确认设备管理器里是 `Qualcomm HS-USB QDLoader 9008`。\n3. **换物理链路**。用可靠数据线接主板后置 USB 2.0 口，去掉 Hub 和延长线。这一步能排掉相当一部分「假协议错误」。\n4. **对齐 programmer**。使用与机型、SoC 严格对应的官方 ROM 里自带的 firehose 文件，不要把别的机型/别的 ROM 的 `prog_firehose_*` 混进来。\n5. **QFIL 操作顺序**：Select Port 选 9008 端口 → Build Type 选 Flat Build → Programmer Path 指到 ROM 内的 firehose elf → Load XML 选 `rawprogram*.xml` 与 `patch*.xml` → Download。路径尽量短、纯英文、无空格。\n6. **`Invalid Firehose programmer` 专项处理**：重新完整解压 ROM（解压中断、杀软拦截 elf 都会造成文件损坏），关闭杀软实时防护后再解压一次；仍报错就换官方完整包。\n7. **`Failed to get sahara mode` 专项处理**：多半是设备没真正进 EDL 或握手中途掉线。每次失败后拔线重插、重新进入 9008，再重试 2–3 次；连续失败就换 USB 口、换线，而不是无脑点重试。\n8. **交叉验证**。MiFlash 失败时改用 QFIL 刷同一套镜像，或反之；能定位是 ROM 包的问题还是工具/端口的问题。\n9. **确认是安全启动拦截**。如果多套官方 programmer 都在认证阶段被拒，不要再反复尝试，改走官方授权刷机流程或售后（见 [[qualcomm-secure-boot-nop-sig-tag]]）。\n\n## 验证\n\n- 日志越过 Sahara 握手，进入 firehose 阶段，并出现逐个分区的写入条目，全程无 `ERROR`；\n- 工具状态栏出现成功/完成提示（不同版本措辞不同，例如 Download Succeed / Finish Download 之类）；\n- 设备自动重启，设备管理器里的 9008 端口消失，出现正常的 Android / MTP 设备；\n- 若日志显示写分区阶段才失败（而不是握手），问题已转到存储侧，见 [[qualcomm-emmc-ufs-flash-write-failure]]。\n\n## 待确认\n\n- 各机型/SoC 对应的 firehose programmer 准确文件名与校验值；\n- 较新平台是否必须走官方授权工具才能完成 Sahara 认证；\n- 不同版本 QFIL / MiFlash 对这些报错的附加错误码。",
+      "path": "wiki/howtos/qualcomm-sahara-firehose-error.md"
+    },
+    {
+      "slug": "qualcomm-secure-boot-nop-sig-tag",
+      "title": "安全启动认证失败：Only nop and sig tag can be received before authentication",
+      "platform": "qualcomm",
+      "category": "howtos",
+      "tags": [
+        "qualcomm",
+        "xiaomi",
+        "secure-boot",
+        "authentication",
+        "qfil"
+      ],
+      "keywords": [
+        "Only nop and sig tag can be received before authentication",
+        "认证失败",
+        "安全启动",
+        "Sahara",
+        "QFIL",
+        "MiFlash"
+      ],
+      "symptom": "设备能进 9008，端口也正常，但工具在发送 firehose programmer 后立刻报错并断开。典型日志（示例，措辞随工具版本略有差异）：\n\n```text\nSend Sahara image ...\nERROR: Only nop and sig tag can be received before authentication\n```\n\n```text\nSahara protocol error\nError: Authentication failed\n```\n\n典型表现是：每次点 Download 都在同一秒数内失败，设备从设备管理器里掉线又重新枚举成 9008；换成多个 ROM 包结果完全一样。",
+      "cause": "- 该机型启用了安全启动（Secure Boot）/量产签名校验。PBL 在通过认证之前，只接受 `nop` 和 `sig`（签名）这两类 Sahara 包，主机发过去的未签名 programmer 直接被拒绝，于是报出这句话。\n- 使用的 firehose programmer 不是该机型 OEM 签名的版本：拿了工程版/未签名 elf，或从别的机型、别的 ROM 复制了 `prog_firehose_*` 文件。\n- 部分较新的机型/平台要求通过官方工具并登录有权限的账号完成认证后才能写入，纯本地离线工具无法完成这一步。",
+      "steps": "1. **停止反复重试**。这不是概率问题，重复点 Download 只会重复被拒，还可能让 USB 枚举反复异常。\n2. **换回官方包内的 programmer**。用与机型完全对应的官方 ROM，直接使用该 ROM 目录里自带的 firehose programmer；重新完整解压一次，并关闭杀软对 `.elf` 等文件的实时拦截，避免文件被截断或隔离。\n3. **排除文件被替换**。确认没有从其他 ROM/其他机型复制过 programmer，也没有被第三方工具改写过文件名；与官方包内原文件比对。\n4. **确认工具侧的认证路径**。部分平台需要 MiFlash 走授权刷机模式（登录具备刷机权限的账号）才能通过认证；QFIL 侧则必须使用与该机型签名匹配的 programmer，二者不能互相替代。\n5. **优先改走 fastboot**。如果设备还能进 fastboot，且 bootloader 已解锁，优先使用官方 fastboot 线刷包完成刷机，绕开 EDL 认证环节（解锁失败见 [[fastboot-unlock-failed]]）。\n6. **走官方售后**。若确认是零售安全启动机型、手上没有可用的授权途径，交官方售后/授权维修点刷机是最可靠的路径。不要尝试用非官方「解锁/绕过」工具，风险高且通常无效。",
+      "verify": "- 日志中不再出现该认证错误，Sahara 握手顺利通过并进入 firehose 写分区阶段（对照 [[qualcomm-sahara-firehose-error]] 的成功特征）；\n- 或改用 fastboot 流程后 `fastboot flash` 不再返回认证/权限类 FAILED，设备能正常启动；\n- 设备刷完后不再回落成 9008（若仍回落见 [[qualcomm-qdl-mode-stuck-bootloop]]）。",
+      "todo": "- 哪些具体机型/平台只接受授权刷机，边界不清；\n- 是否存在官方公开的签名 programmer 分发渠道；\n- 部分机型用官方包仍报认证失败时，是否与账号权限级别有关。",
+      "body": "# 安全启动认证失败：Only nop and sig tag can be received before authentication\n\n## 症状\n\n设备能进 9008，端口也正常，但工具在发送 firehose programmer 后立刻报错并断开。典型日志（示例，措辞随工具版本略有差异）：\n\n```text\nSend Sahara image ...\nERROR: Only nop and sig tag can be received before authentication\n```\n\n```text\nSahara protocol error\nError: Authentication failed\n```\n\n典型表现是：每次点 Download 都在同一秒数内失败，设备从设备管理器里掉线又重新枚举成 9008；换成多个 ROM 包结果完全一样。\n\n## 原因\n\n- 该机型启用了安全启动（Secure Boot）/量产签名校验。PBL 在通过认证之前，只接受 `nop` 和 `sig`（签名）这两类 Sahara 包，主机发过去的未签名 programmer 直接被拒绝，于是报出这句话。\n- 使用的 firehose programmer 不是该机型 OEM 签名的版本：拿了工程版/未签名 elf，或从别的机型、别的 ROM 复制了 `prog_firehose_*` 文件。\n- 部分较新的机型/平台要求通过官方工具并登录有权限的账号完成认证后才能写入，纯本地离线工具无法完成这一步。\n\n## 步骤\n\n1. **停止反复重试**。这不是概率问题，重复点 Download 只会重复被拒，还可能让 USB 枚举反复异常。\n2. **换回官方包内的 programmer**。用与机型完全对应的官方 ROM，直接使用该 ROM 目录里自带的 firehose programmer；重新完整解压一次，并关闭杀软对 `.elf` 等文件的实时拦截，避免文件被截断或隔离。\n3. **排除文件被替换**。确认没有从其他 ROM/其他机型复制过 programmer，也没有被第三方工具改写过文件名；与官方包内原文件比对。\n4. **确认工具侧的认证路径**。部分平台需要 MiFlash 走授权刷机模式（登录具备刷机权限的账号）才能通过认证；QFIL 侧则必须使用与该机型签名匹配的 programmer，二者不能互相替代。\n5. **优先改走 fastboot**。如果设备还能进 fastboot，且 bootloader 已解锁，优先使用官方 fastboot 线刷包完成刷机，绕开 EDL 认证环节（解锁失败见 [[fastboot-unlock-failed]]）。\n6. **走官方售后**。若确认是零售安全启动机型、手上没有可用的授权途径，交官方售后/授权维修点刷机是最可靠的路径。不要尝试用非官方「解锁/绕过」工具，风险高且通常无效。\n\n## 验证\n\n- 日志中不再出现该认证错误，Sahara 握手顺利通过并进入 firehose 写分区阶段（对照 [[qualcomm-sahara-firehose-error]] 的成功特征）；\n- 或改用 fastboot 流程后 `fastboot flash` 不再返回认证/权限类 FAILED，设备能正常启动；\n- 设备刷完后不再回落成 9008（若仍回落见 [[qualcomm-qdl-mode-stuck-bootloop]]）。\n\n## 待确认\n\n- 哪些具体机型/平台只接受授权刷机，边界不清；\n- 是否存在官方公开的签名 programmer 分发渠道；\n- 部分机型用官方包仍报认证失败时，是否与账号权限级别有关。",
+      "path": "wiki/howtos/qualcomm-secure-boot-nop-sig-tag.md"
+    },
+    {
+      "slug": "recovery-adb-sideload-errors",
+      "title": "Recovery 下 adb sideload 报错：failed to read command / 签名校验失败 / error: closed（含 EDL/9008 兜底思路）",
+      "platform": "recovery",
+      "category": "howtos",
+      "tags": [
+        "recovery",
+        "fastboot",
+        "xiaomi",
+        "adb-sideload",
+        "ota",
+        "edl"
+      ],
+      "keywords": [
+        "failed to read command",
+        "error: closed",
+        "adb sideload 失败",
+        "签名校验失败",
+        "卡recovery",
+        "无法开机",
+        "EDL"
+      ],
+      "symptom": "PC 端执行 sideload 后立刻失败：\n\n```\n$ adb sideload miui_update.zip\nserving: 'miui_update.zip'  (~0%)\nadb: failed to read command: No error\n```\n\n```\n$ adb sideload update.zip\nadb: error: closed\n```\n\nRecovery 屏幕上的校验失败（原厂 recovery 典型文案）：\n\n```\nVerifying update package...\nE: failed to verify whole-file signature\nE: signature verification failed\nInstallation aborted.\n```\n\n其他常见伴随现象：\n\n- 进度条卡在 0% 不动，或走到中途突然断开，recovery 报安装失败。\n- 包能开始传输，但 recovery 报 assert / 机型不匹配一类错误后中止（TWRP 下常见 `E:Error in /sideload/package.zip (Status 7)` 形式的提示）。\n- 反复重试都是同样的错误；`adb devices` 能看到设备，但状态不是 `sideload`。",
+      "cause": "- **没有进入 recovery 的 sideload 模式**：`adb sideload` 只在 recovery 的 sideload 界面下有效。原厂 recovery 要先选 `Apply update from ADB`（应用来自 ADB 的更新）；TWRP 要先在 `Advanced → ADB Sideload` 滑动启动。在系统里或普通 recovery 界面直接执行，设备端会立刻断开，PC 端就报 `failed to read command` / `error: closed`。\n- **adb / platform-tools 版本不匹配或混用**：过旧的 adb 与较新的 recovery 协议不兼容；PATH 里存在多份不同来源的 adb 也会出现莫名其妙的断连。\n- **包的签名 / 格式不符合当前 recovery 的预期**：官方 OTA 由厂商密钥签名，第三方 zip 需要对应的第三方 recovery 才能接受；对 zip 做过改动（改包、重新打包）会破坏签名，从而 `signature verification failed`。包与机型不匹配也会在 assert / 校验阶段被拒。\n- **传输链路不稳或电量不足**：劣质线材、Hub、USB 口供电/兼容性问题导致传输中断；电量过低时部分 recovery 会拒绝刷写。",
+      "steps": "1. **先在设备上进入正确的 sideload 模式**：\n\n   - 原厂 recovery（音量键移动、电源键确认）：选择 `Apply update from ADB` / 「应用来自 ADB 的更新」→ 确认。屏幕应提示正在等待通过 ADB 发送安装包。\n   - TWRP：`Advanced` → `ADB Sideload` → 滑动 `Swipe to Start Sideload`。\n\n2. **在 PC 上确认设备处于 sideload 状态**：\n\n   ```\n   adb devices\n   ```\n\n   正常应输出 `<序列号>  sideload`。如果显示 `device` / `unauthorized` / 空列表，说明还没进对模式或驱动异常，先处理连接（fastboot 侧连接问题见 [[fastboot-devices-not-detected]]）。\n\n3. **执行 sideload（路径含空格要加引号）**：\n\n   ```\n   adb sideload \"D:\\ota\\miui_update.zip\"\n   ```\n\n   正常结束时会显示传输比例（形如 `Total xfer: 1.00x`）并让设备继续安装。\n\n4. **处理 `failed to read command` / `error: closed`**：\n\n   1. 回到 recovery 重新进入 sideload 模式，再执行一次 —— 模式未就绪是最常见原因。\n   2. 换线、换主板后置 USB 口（优先 USB 2.0），去掉 Hub，再试。\n   3. 重启 adb 服务后重试：\n\n      ```\n      adb kill-server\n      adb devices\n      ```\n\n   4. 更新 platform-tools 到官方最新版，并确认系统里只有一份 adb（临时把其它路径从 PATH 里移除或直接用完整路径调用）。\n   5. 换一台电脑试，排除本机 USB 栈 / 第三方手机助手的干扰。\n\n5. **处理签名 / 校验失败**：\n\n   1. 换用与本机、与本 recovery 匹配的官方签名 OTA 包，不要使用改包或来源不明的包。\n   2. **不要试图绕过签名校验**：绕过签名会让设备接受未经验证的镜像，风险远大于收益，也没有必要 —— 官方包本来就该通过校验。\n   3. 校验包是否完整：重新下载（断点续传容易得到损坏文件），并与下载页给出的校验值比对，例如 Windows 下：\n\n      ```\n      certutil -hashfile \"D:\\ota\\miui_update.zip\" SHA256\n      ```\n\n   4. 解锁设备后，可先刷入与包匹配的第三方 recovery，再用该 recovery 刷对应签名的 zip。\n\n6. **处理中途断开 / 大包失败**：先确认电量充足（接充电器操作），再重试；官方完整包体积大，建议用原装线直连后置 USB 口，途中不要动手机。\n\n7. **同一台设备换个刷入途径**：recovery 侧始终失败时，改走 fastboot 线刷官方完整包：\n\n   - 已解锁的情况下用官方 fastboot 整包刷写（含 `flash_all.bat` / `flash_all.sh`），报错排查见 [[fastboot-flash-errors]] 与 [[miflash-flash-script-errors]]。\n   - 刷完如果卡 recovery / 数据分区挂载失败，见 [[recovery-cant-load-android-system]]。\n\n8. **兜底：EDL / 9008 思路**：\n\n   - 高通平台：设备进入 EDL（9008）模式后用官方工具重刷，进入方式与前提条件见 [[qualcomm-edl-9008-enter]]。\n   - 联发科平台：用官方刷机工具（SP Flash Tool 一类），常见报错见 [[mtk-spflash-error-4032-4004-4008]]。\n   - 重要前提：小米机型的 EDL 刷写通常需要官方授权账号或走售后渠道，普通用户不一定能自行完成。**不要使用来源不明的 firehose / 编程器文件**，也不要相信「免授权秒刷」的服务。\n   - 如果整机连 EDL 也无法进入（PC 完全无枚举、无端口出现），基本属于硬件层面问题，走官方售后检测。",
+      "verify": "- sideload 过程在 PC 端正常结束（出现类似 `Total xfer: 1.00x` 的完整传输比例），没有 `failed to read command` / `error: closed` / 签名报错。\n- recovery 屏幕显示安装完成（原厂 recovery 出现安装成功 / 状态 0 一类提示，TWRP 显示成功），随后设备可正常重启。\n- 设备能进入系统并完成开机向导；「设置 → 关于手机」中的版本号、安全补丁级别已更新为所刷 OTA 的版本。\n- 若原本是系统内收到更新提示，开机后该更新提示消失、系统内检查更新显示已是最新。",
+      "todo": "- 不同 recovery（MIUI / HyperOS 原厂 recovery、TWRP）的 sideload 菜单名称与报错文案存在差异，具体以本机界面为准，待确认。\n- 各 recovery 对电量阈值的要求，以及对 adb / platform-tools 最低版本的要求，待确认。\n- 官方 OTA 是否允许 sideload、是否存在防回滚（rollback）校验，视机型与版本而定，待确认。\n- 各平台 EDL / 9008 与官方工具的具体授权要求随机型与地区政策变化，待确认。",
+      "body": "# Recovery 下 adb sideload 报错：failed to read command / 签名校验失败 / error: closed（含 EDL/9008 兜底思路）\n\n## 症状\n\nPC 端执行 sideload 后立刻失败：\n\n```\n$ adb sideload miui_update.zip\nserving: 'miui_update.zip'  (~0%)\nadb: failed to read command: No error\n```\n\n```\n$ adb sideload update.zip\nadb: error: closed\n```\n\nRecovery 屏幕上的校验失败（原厂 recovery 典型文案）：\n\n```\nVerifying update package...\nE: failed to verify whole-file signature\nE: signature verification failed\nInstallation aborted.\n```\n\n其他常见伴随现象：\n\n- 进度条卡在 0% 不动，或走到中途突然断开，recovery 报安装失败。\n- 包能开始传输，但 recovery 报 assert / 机型不匹配一类错误后中止（TWRP 下常见 `E:Error in /sideload/package.zip (Status 7)` 形式的提示）。\n- 反复重试都是同样的错误；`adb devices` 能看到设备，但状态不是 `sideload`。\n\n## 原因\n\n- **没有进入 recovery 的 sideload 模式**：`adb sideload` 只在 recovery 的 sideload 界面下有效。原厂 recovery 要先选 `Apply update from ADB`（应用来自 ADB 的更新）；TWRP 要先在 `Advanced → ADB Sideload` 滑动启动。在系统里或普通 recovery 界面直接执行，设备端会立刻断开，PC 端就报 `failed to read command` / `error: closed`。\n- **adb / platform-tools 版本不匹配或混用**：过旧的 adb 与较新的 recovery 协议不兼容；PATH 里存在多份不同来源的 adb 也会出现莫名其妙的断连。\n- **包的签名 / 格式不符合当前 recovery 的预期**：官方 OTA 由厂商密钥签名，第三方 zip 需要对应的第三方 recovery 才能接受；对 zip 做过改动（改包、重新打包）会破坏签名，从而 `signature verification failed`。包与机型不匹配也会在 assert / 校验阶段被拒。\n- **传输链路不稳或电量不足**：劣质线材、Hub、USB 口供电/兼容性问题导致传输中断；电量过低时部分 recovery 会拒绝刷写。\n\n## 步骤\n\n1. **先在设备上进入正确的 sideload 模式**：\n\n   - 原厂 recovery（音量键移动、电源键确认）：选择 `Apply update from ADB` / 「应用来自 ADB 的更新」→ 确认。屏幕应提示正在等待通过 ADB 发送安装包。\n   - TWRP：`Advanced` → `ADB Sideload` → 滑动 `Swipe to Start Sideload`。\n\n2. **在 PC 上确认设备处于 sideload 状态**：\n\n   ```\n   adb devices\n   ```\n\n   正常应输出 `<序列号>  sideload`。如果显示 `device` / `unauthorized` / 空列表，说明还没进对模式或驱动异常，先处理连接（fastboot 侧连接问题见 [[fastboot-devices-not-detected]]）。\n\n3. **执行 sideload（路径含空格要加引号）**：\n\n   ```\n   adb sideload \"D:\\ota\\miui_update.zip\"\n   ```\n\n   正常结束时会显示传输比例（形如 `Total xfer: 1.00x`）并让设备继续安装。\n\n4. **处理 `failed to read command` / `error: closed`**：\n\n   1. 回到 recovery 重新进入 sideload 模式，再执行一次 —— 模式未就绪是最常见原因。\n   2. 换线、换主板后置 USB 口（优先 USB 2.0），去掉 Hub，再试。\n   3. 重启 adb 服务后重试：\n\n      ```\n      adb kill-server\n      adb devices\n      ```\n\n   4. 更新 platform-tools 到官方最新版，并确认系统里只有一份 adb（临时把其它路径从 PATH 里移除或直接用完整路径调用）。\n   5. 换一台电脑试，排除本机 USB 栈 / 第三方手机助手的干扰。\n\n5. **处理签名 / 校验失败**：\n\n   1. 换用与本机、与本 recovery 匹配的官方签名 OTA 包，不要使用改包或来源不明的包。\n   2. **不要试图绕过签名校验**：绕过签名会让设备接受未经验证的镜像，风险远大于收益，也没有必要 —— 官方包本来就该通过校验。\n   3. 校验包是否完整：重新下载（断点续传容易得到损坏文件），并与下载页给出的校验值比对，例如 Windows 下：\n\n      ```\n      certutil -hashfile \"D:\\ota\\miui_update.zip\" SHA256\n      ```\n\n   4. 解锁设备后，可先刷入与包匹配的第三方 recovery，再用该 recovery 刷对应签名的 zip。\n\n6. **处理中途断开 / 大包失败**：先确认电量充足（接充电器操作），再重试；官方完整包体积大，建议用原装线直连后置 USB 口，途中不要动手机。\n\n7. **同一台设备换个刷入途径**：recovery 侧始终失败时，改走 fastboot 线刷官方完整包：\n\n   - 已解锁的情况下用官方 fastboot 整包刷写（含 `flash_all.bat` / `flash_all.sh`），报错排查见 [[fastboot-flash-errors]] 与 [[miflash-flash-script-errors]]。\n   - 刷完如果卡 recovery / 数据分区挂载失败，见 [[recovery-cant-load-android-system]]。\n\n8. **兜底：EDL / 9008 思路**：\n\n   - 高通平台：设备进入 EDL（9008）模式后用官方工具重刷，进入方式与前提条件见 [[qualcomm-edl-9008-enter]]。\n   - 联发科平台：用官方刷机工具（SP Flash Tool 一类），常见报错见 [[mtk-spflash-error-4032-4004-4008]]。\n   - 重要前提：小米机型的 EDL 刷写通常需要官方授权账号或走售后渠道，普通用户不一定能自行完成。**不要使用来源不明的 firehose / 编程器文件**，也不要相信「免授权秒刷」的服务。\n   - 如果整机连 EDL 也无法进入（PC 完全无枚举、无端口出现），基本属于硬件层面问题，走官方售后检测。\n\n## 验证\n\n- sideload 过程在 PC 端正常结束（出现类似 `Total xfer: 1.00x` 的完整传输比例），没有 `failed to read command` / `error: closed` / 签名报错。\n- recovery 屏幕显示安装完成（原厂 recovery 出现安装成功 / 状态 0 一类提示，TWRP 显示成功），随后设备可正常重启。\n- 设备能进入系统并完成开机向导；「设置 → 关于手机」中的版本号、安全补丁级别已更新为所刷 OTA 的版本。\n- 若原本是系统内收到更新提示，开机后该更新提示消失、系统内检查更新显示已是最新。\n\n## 待确认\n\n- 不同 recovery（MIUI / HyperOS 原厂 recovery、TWRP）的 sideload 菜单名称与报错文案存在差异，具体以本机界面为准，待确认。\n- 各 recovery 对电量阈值的要求，以及对 adb / platform-tools 最低版本的要求，待确认。\n- 官方 OTA 是否允许 sideload、是否存在防回滚（rollback）校验，视机型与版本而定，待确认。\n- 各平台 EDL / 9008 与官方工具的具体授权要求随机型与地区政策变化，待确认。",
+      "path": "wiki/howtos/recovery-adb-sideload-errors.md"
+    },
+    {
+      "slug": "recovery-cant-load-android-system",
+      "title": "Recovery 报错：Can't load Android system. Your data may be corrupt / failed to mount /data / Unable to mount storage（含 wipe data 流程）",
+      "platform": "recovery",
+      "category": "howtos",
+      "tags": [
+        "recovery",
+        "fastboot",
+        "xiaomi",
+        "wipe-data",
+        "mount",
+        "data-partition"
+      ],
+      "keywords": [
+        "Can't load Android system. Your data may be corrupt",
+        "failed to mount /data",
+        "E:Unable to mount storage",
+        "卡recovery",
+        "无法开机",
+        "wipe data",
+        "factory reset"
+      ],
+      "symptom": "开机直接落到 recovery，屏幕显示：\n\n```\nCan't load Android system. Your data may be corrupt.\nIf you continue to get this message, you may need to\nperform a factory data reset and erase all user data\nstored on this device.\n\nTry again\nFactory data reset\n```\n\n在 recovery（原厂或 TWRP）里挂载 / 读取数据时：\n\n```\nE:failed to mount /data (Invalid argument)\nError: failed to mount /data\nE:Unable to mount storage\n```\n\n其他常见伴随现象：\n\n- TWRP 的 `Wipe` / `Mount` 页刷屏报 `Failed to mount '/data'`，内部存储显示 0MB 或明显偏小的容量。\n- 反复点 `Try again` 依旧回到同一个界面。\n- 进不去系统、卡 recovery，但 recovery 本身能正常启动和操作。",
+      "cause": "- **/data 文件系统或加密元数据损坏**：异常断电、刷机中途断线、TWRP 里误操作格式化都可能造成；此时 recovery 无法解密/挂载用户数据，也就无法启动系统。\n- **加密元数据与当前系统不匹配**：跨版本刷机、从新系统降级回旧系统、刷了第三方内核 / GSI，但保留了旧的数据分区，解密 key 对不上，表现就是「数据可能已损坏」并建议恢复出厂。\n- **分区布局与固件不匹配**：刷入了非本机固件，或动态分区（super）布局与镜像不一致，导致 userdata 所在分区与系统预期不同。\n- **存储硬件故障**：少数情况下是 UFS / eMMC 本身出问题（容量识别异常、反复挂载失败），这类只能走售后。",
+      "steps": "1. **先试一次最轻的处理**：在 `Can't load Android system` 界面选 `Try again`。偶发性挂载失败重启后可能自行恢复。\n\n2. **仍失败则执行 wipe data / factory reset**（会清空全部用户数据，确认已无未备份内容再操作）：\n\n   - 原厂 recovery（音量键移动、电源键确认）：\n     1. 选择 `Wipe data/factory reset`（中文界面为「清除数据 / 恢复出厂设置」）→ 确认。\n     2. 如有 `Wipe cache partition`（部分机型才有此独立项）一并执行。\n     3. 选择 `Reboot system now`。\n   - TWRP：\n     1. `Wipe` → `Format Data` → 按提示输入 `yes` 回车。\n     2. `Format Data` 会重建 /data 文件系统；只做普通的 `Wipe`（滑动清除）往往不足以修复挂载失败。\n\n3. **TWRP 仍报 `Unable to mount storage`** 时，尝试修复文件系统：\n\n   1. `Wipe` → `Repair or Change File System` → 选中 `/data`。\n   2. 先试 `Repair File System`；不行再试 `Change File System` 并选择本机原本使用的文件系统类型（ext4 或 f2fs，视机型而定）。\n   3. 注意：选错文件系统类型会导致系统无法挂载 /data，操作前先确认本机原本使用的类型；不确定就不要改（见 待确认）。\n\n4. **用 fastboot 侧清数据**（已解锁的 bootloader）：\n\n   ```\n   fastboot devices\n   fastboot erase userdata\n   ```\n\n   或使用 `-w` 参数在刷机时一并清数据（是否被 bootloader 支持视机型而定）：\n\n   ```\n   fastboot -w\n   ```\n\n   部分机型的加密元数据存放在独立分区，若清完 userdata 仍无法挂载，需要连同该分区一并清除 —— 分区名与是否存在视机型而定（见 待确认），不确定时优先走第 5 步整包刷机。\n\n5. **刷官方完整 fastboot 包**（最稳妥）：用本机对应的官方 fastboot 整包（含 `flash_all.bat` / `flash_all.sh`）执行，会重建分区并清空数据，可同时修复分区布局与文件系统问题。整包刷写报错（如分区不存在 / 未解锁）见 [[fastboot-flash-errors]] 与 [[miflash-flash-script-errors]]。\n\n6. **降级 / 跨版本刷机的规矩**：从新系统刷回旧版本时不要保留数据，先清数据再开机；保留旧数据几乎必然落到 `Can't load Android system`。\n\n7. **刷完首次开机耐心等**：清数据后首次开机可能需要较长时间，期间不要断电、不要反复长按电源键；若超过合理时长仍黑屏/循环，回到 recovery 看是否仍在报挂载错误。\n\n8. **若挂载一直失败且容量识别异常**：停止继续格式化，判定为存储硬件问题的可能性较大，走官方售后检测。",
+      "verify": "- recovery 中 /data 能正常挂载：TWRP 的 `Mount` 页勾选 `Data` 不再报错，`Wipe` 页不再刷 `Unable to mount storage`，内部存储能显示正常容量并可读写文件。\n- 设备能通过 recovery 的 `Reboot system now` 进入系统，并完成开机向导。\n- 进入系统后「设置 → 存储」显示的总容量与机型标称一致，而非 0MB 或异常小容量。\n- 若为刷机修复，开机后「设置 → 关于手机」的版本号与所刷固件一致。",
+      "todo": "- TWRP（及第三方 recovery）对具体机型 /data 加密方式（是否 metadata 加密）的兼容性不同，Format Data 与 Change File System 的可用性和后果需按机型确认，待确认。\n- `fastboot -w` 是否被特定机型的 bootloader 支持，以及它具体清除哪些分区，待确认。\n- 加密元数据所在分区名与是否存在（不同平台 / 机型差异较大），待确认。\n- 不同 recovery 对电量阈值的要求，待确认。",
+      "body": "# Recovery 报错：Can't load Android system. Your data may be corrupt / failed to mount /data / Unable to mount storage（含 wipe data 流程）\n\n## 症状\n\n开机直接落到 recovery，屏幕显示：\n\n```\nCan't load Android system. Your data may be corrupt.\nIf you continue to get this message, you may need to\nperform a factory data reset and erase all user data\nstored on this device.\n\nTry again\nFactory data reset\n```\n\n在 recovery（原厂或 TWRP）里挂载 / 读取数据时：\n\n```\nE:failed to mount /data (Invalid argument)\nError: failed to mount /data\nE:Unable to mount storage\n```\n\n其他常见伴随现象：\n\n- TWRP 的 `Wipe` / `Mount` 页刷屏报 `Failed to mount '/data'`，内部存储显示 0MB 或明显偏小的容量。\n- 反复点 `Try again` 依旧回到同一个界面。\n- 进不去系统、卡 recovery，但 recovery 本身能正常启动和操作。\n\n## 原因\n\n- **/data 文件系统或加密元数据损坏**：异常断电、刷机中途断线、TWRP 里误操作格式化都可能造成；此时 recovery 无法解密/挂载用户数据，也就无法启动系统。\n- **加密元数据与当前系统不匹配**：跨版本刷机、从新系统降级回旧系统、刷了第三方内核 / GSI，但保留了旧的数据分区，解密 key 对不上，表现就是「数据可能已损坏」并建议恢复出厂。\n- **分区布局与固件不匹配**：刷入了非本机固件，或动态分区（super）布局与镜像不一致，导致 userdata 所在分区与系统预期不同。\n- **存储硬件故障**：少数情况下是 UFS / eMMC 本身出问题（容量识别异常、反复挂载失败），这类只能走售后。\n\n## 步骤\n\n1. **先试一次最轻的处理**：在 `Can't load Android system` 界面选 `Try again`。偶发性挂载失败重启后可能自行恢复。\n\n2. **仍失败则执行 wipe data / factory reset**（会清空全部用户数据，确认已无未备份内容再操作）：\n\n   - 原厂 recovery（音量键移动、电源键确认）：\n     1. 选择 `Wipe data/factory reset`（中文界面为「清除数据 / 恢复出厂设置」）→ 确认。\n     2. 如有 `Wipe cache partition`（部分机型才有此独立项）一并执行。\n     3. 选择 `Reboot system now`。\n   - TWRP：\n     1. `Wipe` → `Format Data` → 按提示输入 `yes` 回车。\n     2. `Format Data` 会重建 /data 文件系统；只做普通的 `Wipe`（滑动清除）往往不足以修复挂载失败。\n\n3. **TWRP 仍报 `Unable to mount storage`** 时，尝试修复文件系统：\n\n   1. `Wipe` → `Repair or Change File System` → 选中 `/data`。\n   2. 先试 `Repair File System`；不行再试 `Change File System` 并选择本机原本使用的文件系统类型（ext4 或 f2fs，视机型而定）。\n   3. 注意：选错文件系统类型会导致系统无法挂载 /data，操作前先确认本机原本使用的类型；不确定就不要改（见 待确认）。\n\n4. **用 fastboot 侧清数据**（已解锁的 bootloader）：\n\n   ```\n   fastboot devices\n   fastboot erase userdata\n   ```\n\n   或使用 `-w` 参数在刷机时一并清数据（是否被 bootloader 支持视机型而定）：\n\n   ```\n   fastboot -w\n   ```\n\n   部分机型的加密元数据存放在独立分区，若清完 userdata 仍无法挂载，需要连同该分区一并清除 —— 分区名与是否存在视机型而定（见 待确认），不确定时优先走第 5 步整包刷机。\n\n5. **刷官方完整 fastboot 包**（最稳妥）：用本机对应的官方 fastboot 整包（含 `flash_all.bat` / `flash_all.sh`）执行，会重建分区并清空数据，可同时修复分区布局与文件系统问题。整包刷写报错（如分区不存在 / 未解锁）见 [[fastboot-flash-errors]] 与 [[miflash-flash-script-errors]]。\n\n6. **降级 / 跨版本刷机的规矩**：从新系统刷回旧版本时不要保留数据，先清数据再开机；保留旧数据几乎必然落到 `Can't load Android system`。\n\n7. **刷完首次开机耐心等**：清数据后首次开机可能需要较长时间，期间不要断电、不要反复长按电源键；若超过合理时长仍黑屏/循环，回到 recovery 看是否仍在报挂载错误。\n\n8. **若挂载一直失败且容量识别异常**：停止继续格式化，判定为存储硬件问题的可能性较大，走官方售后检测。\n\n## 验证\n\n- recovery 中 /data 能正常挂载：TWRP 的 `Mount` 页勾选 `Data` 不再报错，`Wipe` 页不再刷 `Unable to mount storage`，内部存储能显示正常容量并可读写文件。\n- 设备能通过 recovery 的 `Reboot system now` 进入系统，并完成开机向导。\n- 进入系统后「设置 → 存储」显示的总容量与机型标称一致，而非 0MB 或异常小容量。\n- 若为刷机修复，开机后「设置 → 关于手机」的版本号与所刷固件一致。\n\n## 待确认\n\n- TWRP（及第三方 recovery）对具体机型 /data 加密方式（是否 metadata 加密）的兼容性不同，Format Data 与 Change File System 的可用性和后果需按机型确认，待确认。\n- `fastboot -w` 是否被特定机型的 bootloader 支持，以及它具体清除哪些分区，待确认。\n- 加密元数据所在分区名与是否存在（不同平台 / 机型差异较大），待确认。\n- 不同 recovery 对电量阈值的要求，待确认。",
+      "path": "wiki/howtos/recovery-cant-load-android-system.md"
+    }
+  ]
+}

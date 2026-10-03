@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# Briefcase 构建产物
+base_path/
+*.msi
+*.aab
+*.apk
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 本地运行/构建产物
+.run-tmp/
