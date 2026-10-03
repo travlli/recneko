@@ -150,10 +150,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: 安装 Briefcase
+      - name: 安装 Briefcase + 生成数据所需依赖
         run: |
           python -m pip install --upgrade pip
-          pip install briefcase
+          pip install briefcase pillow numpy
 
       - name: 生成知识库 + 图标 + 图片参考库
         env:
@@ -211,12 +211,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 安装 Briefcase
+      - name: 安装 Briefcase + 生成数据所需依赖
         run: |
           python -m pip install --upgrade pip
-          pip install briefcase
+          pip install briefcase pillow numpy
 
       - name: 生成知识库 + 图标
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           python tools/build_kb.py
           python tools/make_icon.py
