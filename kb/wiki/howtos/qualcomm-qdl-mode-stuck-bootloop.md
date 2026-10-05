@@ -48,7 +48,7 @@ platform: qualcomm
 5. **刷完不要急着反复重启**：首次开机可能较慢，给它足够时间。若确实反复重启，重新进 fastboot/EDL 完整刷一次，并抓取完整日志，确认没有隐藏的写失败或超时。
 6. **persist 分区的正确做法**：只恢复**本机自己**的 persist 备份。没有备份时，绝对不要用其他机器的 persist 镜像覆盖，否则指纹/传感器校准数据永久丢失，刷机无法恢复。官方全刷包里是否包含可用的 persist 镜像视具体 ROM 而定，不确定时不要刷该分区。
 7. **modem / 基带问题**：若刷完能进系统但无信号、设置里基带版本为空，用本机对应 ROM 里的 modem 类镜像重新刷入（不同平台文件名不同，如 `modem` 分区镜像、`NON-HLOS.bin` 一类）。若 modemst/fsg 校准分区已丢失或被写坏，普通刷机无法重新生成，需要专业工具或官方售后处理。
-8. **锁与权限问题**：fastboot 被锁或无法解锁会导致刷写被拒，参见 [[fastboot-unlock-failed]]；安全启动机型在 EDL 下被认证拦截时参见 [[qualcomm-secure-boot-nop-sig-tag]]。
+8. **锁与权限问题**：fastboot 被锁或无法解锁会导致刷写被拒，参见 [[fastboot-unlock-token-verify-failed]]；安全启动机型在 EDL 下被认证拦截时参见 [[qualcomm-secure-boot-nop-sig-tag]]。
 
 ## 验证
 

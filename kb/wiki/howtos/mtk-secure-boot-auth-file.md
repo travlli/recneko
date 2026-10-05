@@ -24,7 +24,7 @@ S_DA_..._SECURE_BOOT
 
 - 换了好几份固件包、好几个 DA 都一样报错，设备进不了系统（卡 logo、反复重启）；
 - 降级刷旧版固件时必报错，刷同版本或更新版本有时能正常（防回滚）；
-- 设备 bootloader 处于锁定状态，fastboot 解锁失败或解锁开关不可用，相关流程见 [[fastboot-unlock-failed]]。
+- 设备 bootloader 处于锁定状态，fastboot 解锁失败或解锁开关不可用，相关流程见 [[fastboot-unlock-token-verify-failed]]。
 
 ## 原因
 
@@ -38,7 +38,7 @@ S_DA_..._SECURE_BOOT
 2. 准备本机型/本 SoC 对应的 auth 文件。文件名与获取渠道随机型而定（常见如 `auth_sv5.auth`，待确认）；用错机型的 auth 一定失败。
 3. 在 SP Flash Tool 的 **Download** 标签页，分别设置好 `Download Agent`（官方 DA）与 `Authentication File`（auth 文件），再执行下载，参见 [[mtk-spflash-send-da-fail-hash-mismatch]]。
 4. 换官方固件包自带的 DA + auth 组合重试；若仍报 secure boot 类错误，说明 auth 与设备密钥不匹配，需要找到真正对应本机型的 auth，而不是反复换固件版本。
-5. 若 bootloader 处于锁定状态且需要解锁：按小米官方解锁流程操作（需要账号绑定与等待期，具体时长与政策待确认）；解锁失败参考 [[fastboot-unlock-failed]]。
+5. 若 bootloader 处于锁定状态且需要解锁：按小米官方解锁流程操作（需要账号绑定与等待期，具体时长与政策待确认）；解锁失败参考 [[fastboot-unlock-token-verify-failed]]。
 6. 保持链路稳定，避免把「掉线」误判成安全启动问题：USB 2.0 后置端口、可靠数据线、**Full Speed**、规范进入 BROM，见 [[mtk-brom-vs-preloader-mode]]。
 7. 不要尝试用改名、替换镜像签名或来源不明的「绕过工具」规避安全启动：既不可靠，也可能让设备进入更难恢复的状态。
 

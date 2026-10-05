@@ -21,3 +21,21 @@ base_path/
 
 # 本地运行/构建产物
 .run-tmp/
+# 运行时日志（logsetup 在首选目录不可写时会落在这里）
+logs/
+.btmp/
+.audit_*.py
+.audit_*.jpg
+.audit_*.png
+# 真实网图测试素材：第三方内容，只用于本地验证，不提交、不打包
+.rec_test/
+.rec_*.py
+.ocr_*.py
+.probe_*.py
+.e2e*.py
+.thresh*.py
+.online_probe.py
+# pytest 的 tmp_path 目录（跑测试时在工作区根目录产生）
+pytest-of-*/
+.pytest_cache/
+.commitmsg.txt

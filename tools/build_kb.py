@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import re
 import sys
@@ -146,6 +147,11 @@ def parse_page(path: Path, kb_root: Path) -> dict[str, object]:
     except ValueError:
         category = path.parent.name
 
+    # Normalise sources to a list (frontmatter may write it as a bare string).
+    raw_sources = front.get("sources") or []
+    if isinstance(raw_sources, str):
+        raw_sources = [raw_sources]
+
     return {
         "slug": path.stem,
         "title": title,
@@ -153,6 +159,9 @@ def parse_page(path: Path, kb_root: Path) -> dict[str, object]:
         "category": category,
         "tags": [str(t) for t in tags],
         "keywords": [str(k) for k in keywords],
+        # Carried through so validate() can flag pages with no raw material
+        # behind them (the schema requires sources; nothing enforced it).
+        "sources": [str(s) for s in raw_sources],
         "symptom": sections.get("symptom", ""),
         "cause": sections.get("cause", ""),
         "steps": sections.get("steps", ""),
@@ -227,13 +236,57 @@ def build(kb_root: Path) -> tuple[dict, list[dict]]:
     entries = [parse_page(path, kb_root) for path in paths]
     entries.sort(key=lambda e: (str(e["platform"]), str(e["slug"])))
 
+    # A content hash, not just a date: two builds on the same day must be
+    # distinguishable, otherwise "which kb.json is this?" is unanswerable.
+    digest = hashlib.sha256(
+        json.dumps(entries, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:12]
+
     payload = {
-        "version": _dt.date.today().isoformat(),
+        "version": f"{_dt.date.today().isoformat()}+{digest}",
         "generated_from": str(kb_root.name),
         "count": len(entries),
         "entries": entries,
     }
     return payload, entries
+
+
+def validate(entries: list[dict]) -> list[str]:
+    """Structural checks the schema asks for but nothing enforced.
+
+    Three real problems this catches:
+
+    * **dead ``[[wiki links]]``** - three pages linked to
+      ``[[fastboot-unlock-failed]]``, a page that does not exist (the real slug
+      is ``fastboot-unlock-token-verify-failed``). The schema's monthly lint is
+      supposed to find these; nothing ran it.
+    * **missing ``keywords``** - such a page cannot be retrieved at all.
+    * **empty ``sources``** - the schema requires every page to cite the raw
+      material it came from. Every page currently has ``sources: []``, which is
+      an honest signal that the corpus is ungrounded; it should be loud rather
+      than silent.
+    """
+    problems: list[str] = []
+    slugs = {str(e["slug"]) for e in entries}
+
+    for entry in entries:
+        slug = str(entry["slug"])
+
+        if not entry["keywords"]:
+            problems.append(f"{slug}: 缺少 keywords，该页无法被检索到")
+
+        if not entry["sources"]:
+            problems.append(
+                f"{slug}: sources 为空 —— 该页没有引用任何 raw/ 素材（内容无据）"
+            )
+
+        body = str(entry.get("body", ""))
+        for link in re.findall(r"\[\[([^\]|]+)", body):
+            target = link.strip()
+            if target and target not in slugs:
+                problems.append(f"{slug}: 死链 [[{target}]]（无此页面）")
+
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -248,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--index", default=None,
                         help="also (re)write index.md at this path; default <kb-root>/index.md")
     parser.add_argument("--no-index", action="store_true", help="skip index.md regeneration")
+    parser.add_argument("--strict", action="store_true",
+                        help="把校验问题当作错误（非零退出）")
+    parser.add_argument("--quiet", action="store_true", help="只输出错误")
     args = parser.parse_args(argv)
 
     kb_root = Path(args.kb_root).resolve()
@@ -259,24 +315,39 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
-    print(f"[build_kb] {len(entries)} 个条目 -> {out_path}")
+    if not args.quiet:
+        print(f"[build_kb] {len(entries)} 个条目 -> {out_path}")
 
     if not args.no_index:
         index_path = Path(args.index) if args.index else kb_root / "index.md"
         index_path.write_text(render_index(entries, kb_root), encoding="utf-8")
-        print(f"[build_kb] index.md -> {index_path}")
+        if not args.quiet:
+            print(f"[build_kb] index.md -> {index_path}")
 
-    by_platform: dict[str, int] = {}
-    for entry in entries:
-        by_platform[str(entry["platform"])] = by_platform.get(str(entry["platform"]), 0) + 1
-    summary = "、".join(f"{k}:{v}" for k, v in sorted(by_platform.items()))
-    print(f"[build_kb] 平台分布 {summary}")
+    if not args.quiet:
+        by_platform: dict[str, int] = {}
+        for entry in entries:
+            key = str(entry["platform"])
+            by_platform[key] = by_platform.get(key, 0) + 1
+        summary = "、".join(f"{k}:{v}" for k, v in sorted(by_platform.items()))
+        print(f"[build_kb] 平台分布 {summary}")
 
-    # Cheap schema sanity check: a page without keywords cannot be retrieved.
-    for entry in entries:
-        if not entry["keywords"]:
-            print(f"[build_kb] ⚠️  {entry['slug']} 缺少 keywords，检索效果会变差",
-                  file=sys.stderr)
+    problems = validate(entries)
+    if problems:
+        # Dead links are always an error: they mean the KB is internally broken.
+        dead_links = [p for p in problems if "死链" in p]
+        print(f"\n[build_kb] 校验发现 {len(problems)} 个问题：", file=sys.stderr)
+        for problem in problems:
+            print(f"  - {problem}", file=sys.stderr)
+        if dead_links or args.strict:
+            print(
+                f"\n[build_kb] {'存在死链' if dead_links else '--strict'}：构建失败",
+                file=sys.stderr,
+            )
+            return 1
+    elif not args.quiet:
+        print("[build_kb] 校验通过")
+
     return 0
 
 

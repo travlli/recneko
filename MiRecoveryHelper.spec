@@ -1,69 +1,36 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec: build a single-file Windows .exe.
+"""PyInstaller spec: Toga single-file exe (x64 Windows only).
 
-Usage (from the project root, inside a venv with pyinstaller + toga-winforms):
+This build keeps the Toga/WinForms backend, so it only works where pythonnet
+has a matching runtime - i.e. x64 Windows. On Windows on ARM it will fail at
+startup with "Failed to resolve Python.Runtime.Loader.Initialize"; use the
+tkinter build there instead (see MiRecoveryHelper-tk.spec).
+
+The launcher probes the backend at runtime and falls back to tkinter, so even
+this build degrades gracefully rather than crashing - but there is no point
+shipping it to an ARM64 machine.
 
     pyinstaller --noconfirm MiRecoveryHelper.spec
-
-Output: dist/MiRecoveryHelper.exe
-
-The knowledge base (src/mirecovery/data/kb.json) is bundled as data; the app
-resolves it at runtime via sys._MEIPASS (see src/mirecovery/kb.py).
+    # -> dist/rec检查喵-toga.exe
 """
 
+import sys
 from pathlib import Path
 
-# PyInstaller executes this spec with its own globals; `SPECPATH` is provided.
-PROJECT_ROOT = Path(SPECPATH).resolve()
-DATA_FILE = PROJECT_ROOT / "src" / "mirecovery" / "data" / "kb.json"
-REFS_FILE = PROJECT_ROOT / "src" / "mirecovery" / "data" / "image_refs.json"
-ICON_FILE = PROJECT_ROOT / "src" / "mirecovery" / "resources" / "icon.ico"
+ROOT = Path(SPECPATH).resolve()
+sys.path.insert(0, str(ROOT / "tools"))
+import spec_common  # noqa: E402
 
-if not DATA_FILE.is_file():
-    raise SystemExit(
-        f"缺少知识库数据文件 {DATA_FILE}，请先运行：python tools/build_kb.py"
-    )
-
-datas = [(str(DATA_FILE), "mirecovery/data")]
-# The screen-recognition reference library is optional: without it the image
-# feature reports itself as unavailable while text search keeps working.
-if REFS_FILE.is_file():
-    datas.append((str(REFS_FILE), "mirecovery/data"))
-
-a = Analysis(  # noqa: F821 - injected by PyInstaller
-    # NOTE: must be src/launcher.py, not src/mirecovery/__main__.py.
-    # PyInstaller runs its entry script as __main__ with no parent package, so
-    # the package's own __main__.py (which uses relative imports) fails with
-    # "attempted relative import with no known parent package".
-    [str(PROJECT_ROOT / "src" / "launcher.py")],
-    pathex=[str(PROJECT_ROOT / "src")],
+a = Analysis(  # noqa: F821
+    [str(ROOT / "src" / "launcher.py")],
+    pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=datas,
-    hiddenimports=[
-        "mirecovery",
-        "mirecovery.app",
-        "mirecovery.kb",
-        "mirecovery.scanner",
-        "mirecovery.report",
-        "mirecovery.recognize",
-        "mirecovery.imagefeatures",
-        # Toga backends are discovered dynamically.
-        "toga_winforms",
-        "toga_winforms.libs",
-    ],
+    datas=spec_common.data_files(ROOT),
+    hiddenimports=spec_common.hidden_imports(with_toga=True),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
-        "test",
-        "unittest",
-        # numpy is an optional accelerator only: imagefeatures.zncc() falls back
-        # to an equivalent pure-Python path. Excluding it keeps the bundle much
-        # smaller, which matters because onefile unpacks into %TEMP% on every
-        # launch (a full disk there causes
-        # "Could not create temporary directory!").
-        "numpy",
-    ],
+    excludes=spec_common.excludes(with_toga=True),
     noarchive=False,
 )
 
@@ -75,12 +42,13 @@ exe = EXE(  # noqa: F821
     a.binaries,
     a.datas,
     [],
-    name="MiRecoveryHelper",
+    name="rec检查喵-toga",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,          # GUI app: no console window
+    console=False,
     disable_windowed_traceback=False,
-    icon=str(ICON_FILE) if ICON_FILE.is_file() else None,
+    icon=spec_common.icon_file(ROOT),
+    version=spec_common.version_file(ROOT),
 )

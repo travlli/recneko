@@ -35,6 +35,25 @@ from pathlib import Path
 REASON = ""
 
 
+def _make_console_unicode_safe() -> None:
+    """Never let console encoding kill the app.
+
+    The packaged build runs under a GBK (codepage 936) console on Chinese
+    Windows, and the UI strings contain characters GBK cannot encode (✅/❌/●).
+    Writing one of those to stdout - via a print, a log record, or an exception
+    traceback - raised ``UnicodeEncodeError`` and took the process down. Measured:
+    the frozen self test died on the settings page's "❌ 启用了联网查询…" message.
+
+    Tk itself renders these fine; only the console is affected, so the fix is to
+    make the console tolerant rather than to strip the characters.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _data_search_dirs() -> list[Path]:
     """Where bundled package data may live, in priority order."""
     directories: list[Path] = []
@@ -107,28 +126,70 @@ def _run_toga() -> None:
 
 def _show_startup_error(message: str) -> None:
     """Last-resort report when even tkinter fails to start."""
+    log_path = ""
+    try:
+        from mirecovery.logsetup import current_log_path
+
+        path = current_log_path()
+        log_path = f"\n\n日志文件：{path}" if path else ""
+    except Exception:
+        pass
     try:
         import tkinter as tk
         from tkinter import messagebox
 
         root = tk.Tk()
         root.withdraw()
-        messagebox.showerror("/rec检查喵/ 启动失败", message)
+        messagebox.showerror(
+            "/rec检查喵/ 启动失败", message[-1200:] + log_path
+        )
         root.destroy()
     except Exception:
         pass
 
 
+def _preferred_gui() -> str:
+    """Decide which GUI to try first.
+
+    Order: explicit environment override, then the value baked in at build time
+    by tools/build_exe.py (``mirecovery._buildcfg``). The build-time value is
+    what makes the tkinter-only build actually prefer tkinter - setting an
+    environment variable inside a PyInstaller spec, as an earlier version did,
+    has no effect on the built executable at all.
+    """
+    choice = os.environ.get("MIRECOVERY_GUI", "").strip().lower()
+    if choice in ("tk", "toga"):
+        return choice
+    try:
+        from mirecovery._buildcfg import DEFAULT_GUI
+
+        if DEFAULT_GUI in ("tk", "toga"):
+            return DEFAULT_GUI
+    except Exception:
+        pass
+    return "auto"
+
+
 def main() -> int:
+    # Before anything can print: a GBK console must not be able to kill the app.
+    _make_console_unicode_safe()
+
+    from mirecovery.logsetup import get_logger, install_excepthook, setup_logging
+
+    log_path = setup_logging()
+    install_excepthook()
+    logger = get_logger("launcher")
+
     _install_data_hooks()
 
-    choice = os.environ.get("MIRECOVERY_GUI", "").strip().lower()
+    choice = _preferred_gui()
+    logger.info("GUI 选择: %s", choice)
+
     if choice == "tk":
-        _run_tk()
-        return 0
+        return _run_or_report(_run_tk, logger)
+
     if choice == "toga":
-        _run_toga()
-        return 0
+        return _run_or_report(_run_toga, logger)
 
     usable, reason = _toga_is_usable()
     if usable:
@@ -136,21 +197,32 @@ def main() -> int:
             _run_toga()
             return 0
         except Exception:
-            traceback.print_exc()
+            logger.exception("Toga 启动失败，回退 tkinter")
             reason = "Toga 启动失败"
 
-    print(
-        f"[launcher] Toga 后端不可用（{reason}），已改用 tkinter 界面。",
-        file=sys.stderr,
-    )
+    logger.warning("Toga 后端不可用（%s），改用 tkinter 界面", reason)
+    print(f"[launcher] Toga 后端不可用（{reason}），已改用 tkinter 界面。", file=sys.stderr)
+    return _run_or_report(_run_tk, logger)
+
+
+def _run_or_report(runner, logger) -> int:
+    """Run a GUI entry point, reporting a startup failure usefully."""
     try:
-        _run_tk()
+        runner()
+        return 0
     except Exception:
         detail = traceback.format_exc()
-        traceback.print_exc()
-        _show_startup_error(detail[-1500:])
+        logger.critical("界面启动失败:\n%s", detail)
+        try:
+            from mirecovery.logsetup import current_log_path, flush_handlers
+
+            flush_handlers()
+            path = current_log_path()
+        except Exception:
+            path = None
+        hint = f"\n\n完整日志：{path}" if path else ""
+        _show_startup_error(detail[-1200:] + hint)
         return 1
-    return 0
 
 
 if __name__ == "__main__":

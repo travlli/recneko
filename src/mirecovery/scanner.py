@@ -45,6 +45,7 @@ class Finding:
 _PLATFORM_SIGNATURES: dict[str, list[tuple[str, float, str]]] = {
     "mtk": [
         (r"\bBROM\b", 4.0, "BROM 关键字"),
+        (r"\bBROM\s+ERROR\b", 6.0, "BROM ERROR 报错"),
         (r"STATUS_BROM_[A-Z_]+", 6.0, "BROM 状态码"),
         (r"STATUS_DA_[A-Z_]+", 6.0, "DA 状态码"),
         (r"SP\s*Flash\s*Tool", 6.0, "SP Flash Tool 日志"),
@@ -54,6 +55,11 @@ _PLATFORM_SIGNATURES: dict[str, list[tuple[str, float, str]]] = {
         (r"mtk[_\- ]?(usb|vcom|preloader)", 4.0, "MTK 驱动"),
         (r"\bDA_HASH_MISMATCH\b", 6.0, "DA 哈希不匹配"),
         (r"\bS_DA_[A-Z_]+", 6.0, "MTK 安全启动状态码"),
+        # SP Flash Tool 的数字错误码（4032 / 2004 / 4008 / 3004 ...）。
+        # 用户经常只贴一行「ERROR 4032」，此前这种输入平台判定为 unknown，
+        # 报告会自相矛盾地同时说「未能判定平台」和给出 MTK 方案。
+        (r"\bERROR[\s:_]*(?:[1-5]\d{3})\b", 5.0, "SP Flash Tool 数字错误码"),
+        (r"\bS_(?:FT|DA|BROM|SEC|RT)_[A-Z_]{3,}", 6.0, "MTK 状态码前缀"),
     ],
     "qualcomm": [
         (r"\bSahara\b|\bsahara\b", 6.0, "Sahara 协议"),
@@ -125,6 +131,11 @@ _GENERIC_ERROR_PATTERNS: list[str] = [
     r"FAILED\s*\(remote:[^)]*\)",
     r"E:\s?[A-Za-z][^,\n]{3,60}",
     r"0x[0-9A-Fa-f]{4,}",
+    # SP Flash Tool prints its code in parentheses right after a symbolic name,
+    # e.g. "S_FT_ENABLE_DRAM_FAIL (4032)". Without this the most important
+    # number in the log was not extracted at all.
+    r"\bS_[A-Z][A-Z0-9_]{3,}\s*\(\s*\d{3,5}\s*\)",
+    r"\(\s*\d{4}\s*\)",
 ]
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")

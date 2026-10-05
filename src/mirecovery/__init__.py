@@ -9,7 +9,7 @@ from .kb import KB, Entry, Match
 from .report import build_report, render
 from .scanner import Finding, analyze
 
-__version__ = "2.0.0"
+__version__ = "2.2.0"
 __app_name__ = theme.APP_DISPLAY_NAME
 
 __all__ = [

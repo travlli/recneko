@@ -1,11 +1,13 @@
 name: Build EXE + APK
 
-# 产出两个交付物：
-#   windows-exe : dist/MiRecoveryHelper.exe   （免安装单文件，用 PyInstaller）
-#   windows-msi : Briefcase 生成的 MSI 安装包（可选，失败不影响其它产物）
-#   android-apk : Briefcase 生成的 APK        （用 Toga 的 Android 后端）
+# 产出：
+#   windows-exe : rec检查喵.exe + 目录版 + 便携压缩包（PyInstaller）
+#   android-apk : rec检查喵-*.apk（Briefcase + Chaquopy）
+#   windows-msi : MSI 安装包（可选，失败不影响其它产物）
 #
-# 触发方式：推送到 main / 手动 Run workflow / 打 tag
+# 重要：本工作流在本机从未运行过（本机没有 JDK 17、没有 git、磁盘也不够）。
+# 它是一份**未经验证**的配置，首次推送时很可能需要调试。请把它当作起点，
+# 而不是"已经能出 apk"的保证。详见 README「4.7 APK 的真实状态」。
 
 on:
   push:
@@ -18,11 +20,17 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONIOENCODING: utf-8
+  # Pin the toolchain so a CI run is reproducible; bump deliberately.
+  BRIEFCASE_VERSION: "0.4.5"
+
 jobs:
   # ------------------------------------------------------------------ 测试
   test:
-    name: 测试（文字检索 + 图片识别）
+    name: 测试（pytest）
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -30,45 +38,26 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 安装图像依赖
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install pillow numpy
+          pip install pillow pytest
 
-      # 校验打包入口点需要 tkinter（tkapp 备选界面，仅用标准库）。
-      # toga 无需安装：打包入口点校验只复现 PyInstaller 的执行上下文，
-      # 不构建窗口，脚本会在缺少 toga 时使用占位实现。
-      - name: 安装 tkinter（Ubuntu 下不在标准库中）
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-tk
-
-      - name: 生成知识库 kb.json
-        env:
-          PYTHONIOENCODING: utf-8
+      - name: 生成知识库
         run: python tools/build_kb.py
 
       - name: 生成图片参考库（合成参考图 + 特征提取）
-        env:
-          PYTHONIOENCODING: utf-8
         run: |
           python tools/make_reference_images.py --clean
           python tools/build_references.py
 
-      - name: 运行完整测试（8 个文字用例 + 图片识别检查）
-        env:
-          PYTHONIOENCODING: utf-8
-        run: python tools/smoke_test.py
+      - name: 运行测试
+        # 走 tools/run_tests.py：GUI 测试单独一个进程。同一个进程里同时用 tkinter
+        # 与 Windows OCR 会在解释器退出时崩（0xC0000005），所有用例其实都通过了。
+        run: python tools/run_tests.py
 
-      - name: 图片识别基准（合成图，报告精度）
-        env:
-          PYTHONIOENCODING: utf-8
+      - name: 图片识别基准（合成图，输出精度）
         run: python tools/benchmark_recognition.py
-
-      - name: 校验打包入口点（防止相对导入导致的启动崩溃）
-        env:
-          PYTHONIOENCODING: utf-8
-        run: python tools/verify_entrypoints.py
 
       - name: 上传数据文件（供后续 job 复用）
         uses: actions/upload-artifact@v4
@@ -80,7 +69,7 @@ jobs:
 
   # ------------------------------------------------------- Windows .exe
   windows-exe:
-    name: Windows 单文件 EXE
+    name: Windows 交付物
     needs: test
     runs-on: windows-latest
     timeout-minutes: 45
@@ -94,46 +83,33 @@ jobs:
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install "toga>=0.4.0" pillow numpy pyinstaller
+          pip install "toga>=0.4.0" pillow pyinstaller
 
       - name: 生成知识库 + 图标 + 图片参考库
-        env:
-          PYTHONIOENCODING: utf-8
         run: |
           python tools/build_kb.py
           python tools/make_icon.py
           python tools/make_reference_images.py --clean
           python tools/build_references.py
 
-      - name: 用 PyInstaller 打单文件 exe
-        run: pyinstaller --noconfirm MiRecoveryHelper.spec
+      - name: 构建全部交付物（含冻结自检）
+        # build_exe.py 会自己跑一遍打包后的自检程序，确认知识库、参考库、
+        # tkinter 都在 exe 内可用；失败则整个 job 失败。
+        run: python tools/build_exe.py
 
-      # 本 job 已装 toga，因此这里跑的是对真实 toga 模块的校验。
-      - name: 校验打包入口点（真实 toga 环境）
-        env:
-          PYTHONIOENCODING: utf-8
-        run: python tools/verify_entrypoints.py
-
-      - name: 确认 exe 存在
+      - name: 列出产物
         shell: pwsh
-        run: |
-          if (-not (Test-Path dist/MiRecoveryHelper.exe)) {
-            throw "dist/MiRecoveryHelper.exe 未生成"
-          }
-          Get-Item dist/MiRecoveryHelper.exe | Select-Object Name, Length
+        run: Get-ChildItem dist | Select-Object Name, Length
 
-      - name: 冒烟测试打包后的 exe（冻结自检）
-        shell: pwsh
-        run: |
-          pyinstaller --noconfirm --distpath dist --workpath build/selftest MiRecoveryHelper.selftest.spec
-          & dist/MiRecoveryHelperSelfTest.exe
-          if ($LASTEXITCODE -ne 0) { throw "冻结自检失败：exe 内知识库不可用" }
-
-      - name: 上传 EXE
+      - name: 上传 EXE 与便携包
         uses: actions/upload-artifact@v4
         with:
-          name: MiRecoveryHelper-windows-exe
-          path: dist/MiRecoveryHelper.exe
+          name: recneko-windows
+          path: |
+            dist/rec检查喵.exe
+            dist/rec检查喵-toga.exe
+            dist/rec检查喵-portable.zip
+            dist/使用说明.txt
           if-no-files-found: error
 
   # ------------------------------------------------------ Android .apk
@@ -154,14 +130,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: 安装 Briefcase + 生成数据所需依赖
+      - name: 安装 Briefcase
         run: |
           python -m pip install --upgrade pip
-          pip install briefcase pillow numpy
+          pip install "briefcase==${{ env.BRIEFCASE_VERSION }}"
 
       - name: 生成知识库 + 图标 + 图片参考库
-        env:
-          PYTHONIOENCODING: utf-8
         run: |
           python tools/build_kb.py
           python tools/make_icon.py
@@ -174,9 +148,9 @@ jobs:
           path: |
             ~/.cache/briefcase
             ~/.gradle
-          key: briefcase-android-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          key: briefcase-android-${{ runner.os }}-${{ env.BRIEFCASE_VERSION }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
-            briefcase-android-${{ runner.os }}-
+            briefcase-android-${{ runner.os }}-${{ env.BRIEFCASE_VERSION }}-
 
       - name: 创建 Android 工程
         run: briefcase create android
@@ -196,7 +170,7 @@ jobs:
       - name: 上传 APK
         uses: actions/upload-artifact@v4
         with:
-          name: MiRecoveryHelper-android-apk
+          name: recneko-android
           path: |
             dist/*.apk
             dist/*.aab
@@ -207,6 +181,7 @@ jobs:
     name: Windows MSI（可选）
     needs: test
     runs-on: windows-latest
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -215,23 +190,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: 安装 Briefcase + 生成数据所需依赖
+      - name: 安装 Briefcase
         run: |
           python -m pip install --upgrade pip
-          pip install briefcase pillow numpy
+          pip install "briefcase==${{ env.BRIEFCASE_VERSION }}"
 
       - name: 生成知识库 + 图标
-        env:
-          PYTHONIOENCODING: utf-8
         run: |
           python tools/build_kb.py
           python tools/make_icon.py
 
       - name: 构建并打包 MSI
-        env:
-          # briefcase 自身要打印含中文的描述/进度，Windows runner 的 stdout
-          # 默认是 cp1252，会抛 UnicodeEncodeError: 'charmap'。
-          PYTHONIOENCODING: utf-8
         run: |
           briefcase create windows
           briefcase build windows
@@ -240,74 +209,6 @@ jobs:
       - name: 上传 MSI
         uses: actions/upload-artifact@v4
         with:
-          name: MiRecoveryHelper-windows-msi
+          name: recneko-windows-msi
           path: dist/*.msi
           if-no-files-found: warn
-
-  # ------------------------------------- 打 tag 时发布 Release + exe 附件
-  # 只有推 v* tag 才跑；普通 push 到 main 时该作业直接跳过。
-  # Windows EXE 作业只把 exe 当 artifact 上传（artifact 会过期），
-  # 这里把它作为 Release 附件固定下来，用户从 Releases 页下载。
-  publish-release:
-    name: 发布 Release（打 tag 时）
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: windows-latest
-    timeout-minutes: 45
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install "toga>=0.4.0" pillow numpy pyinstaller
-
-      - name: 生成知识库 + 图标 + 图片参考库
-        env:
-          PYTHONIOENCODING: utf-8
-        run: |
-          python tools/build_kb.py
-          python tools/make_icon.py
-          python tools/make_reference_images.py --clean
-          python tools/build_references.py
-
-      - name: 冒烟测试打包后的自检 exe（发布前门禁）
-        shell: pwsh
-        run: |
-          pyinstaller --noconfirm --distpath dist --workpath build/selftest MiRecoveryHelper.selftest.spec
-          & dist/MiRecoveryHelperSelfTest.exe
-          if ($LASTEXITCODE -ne 0) { throw "冻结自检失败：exe 内知识库不可用，已中止发布" }
-
-      - name: 构建单文件 exe
-        run: pyinstaller --noconfirm MiRecoveryHelper.spec
-
-      - name: 确认 exe 存在
-        shell: pwsh
-        run: |
-          if (-not (Test-Path dist/MiRecoveryHelper.exe)) {
-            throw "dist/MiRecoveryHelper.exe 未生成"
-          }
-          Get-FileHash dist/MiRecoveryHelper.exe -Algorithm SHA256
-
-      - name: 发布 Release 并挂上 exe
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $tag = "${{ github.ref_name }}"
-          # 该 tag 已存在 Release（例如先手动建过）就补传附件，否则新建。
-          if (gh release view $tag --repo "${{ github.repository }}" 2>$null) {
-            gh release upload $tag dist/MiRecoveryHelper.exe --clobber --repo "${{ github.repository }}"
-          } else {
-            gh release create $tag dist/MiRecoveryHelper.exe `
-              --repo "${{ github.repository }}" `
-              --title "$tag — RecNeko /rec检查喵/" `
-              --generate-notes
-          }
-          "发布完成：https://github.com/${{ github.repository }}/releases/tag/$tag"

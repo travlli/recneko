@@ -45,6 +45,7 @@ THUMB_SIZE = (64, 64)   # thumbnail used for ZNCC matching
 # precision/coverage to 64x64 while tripling the data shipped, so 64 wins.
 GRID = 4               # 4x4 brightness grid
 RGB_BINS = 16
+RGB_CHANNELS = 3       # rgb_hist is three concatenated channel histograms
 HUE_BINS = 12
 
 FEATURE_VERSION = 2
@@ -64,38 +65,62 @@ def _bits_to_hex(bits: list[int]) -> str:
     return f"{value:0{width}x}"
 
 
-def _hex_to_bits(value: str, count: int) -> list[int]:
-    number = int(value, 16)
-    return [(number >> (count - 1 - i)) & 1 for i in range(count)]
+def pixel_values(image: Image.Image) -> list:
+    """Return the pixel values of a single-band image.
+
+    Pillow 12 deprecated ``Image.getdata()`` and removes it in Pillow 14
+    (2027-10-15), so every call site goes through here. ``get_flattened_data``
+    returns the same flat sequence for single-band images; older Pillow falls
+    back to ``getdata``.
+    """
+    getter = getattr(image, "get_flattened_data", None)
+    if getter is not None:
+        return list(getter())
+    return list(image.getdata())  # pragma: no cover - older Pillow only
 
 
 def dhash(image: Image.Image, size: int = HASH_SIZE) -> str:
     """Difference hash: compare horizontally adjacent pixels."""
     small = image.convert("L").resize((size + 1, size), Image.LANCZOS)
-    pixels = list(small.getdata())
+    values = pixel_values(small)
     bits: list[int] = []
     for row in range(size):
         offset = row * (size + 1)
         for col in range(size):
-            bits.append(1 if pixels[offset + col] > pixels[offset + col + 1] else 0)
+            bits.append(1 if values[offset + col] > values[offset + col + 1] else 0)
     return _bits_to_hex(bits)
 
 
 def ahash(image: Image.Image, size: int = HASH_SIZE) -> str:
     """Average hash: compare each pixel against the mean brightness."""
     small = image.convert("L").resize((size, size), Image.LANCZOS)
-    pixels = list(small.getdata())
-    mean = sum(pixels) / len(pixels)
-    return _bits_to_hex([1 if p > mean else 0 for p in pixels])
+    values = pixel_values(small)
+    mean = sum(values) / len(values)
+    return _bits_to_hex([1 if p > mean else 0 for p in values])
 
 
 def hamming(hex_a: str, hex_b: str, count: int = HASH_SIZE * HASH_SIZE) -> int:
     """Number of differing bits between two hex-encoded hashes."""
     if not hex_a or not hex_b:
         return count
-    bits_a = _hex_to_bits(hex_a, count)
-    bits_b = _hex_to_bits(hex_b, count)
-    return sum(1 for x, y in zip(bits_a, bits_b) if x != y)
+    return (_hex_int(hex_a) ^ _hex_int(hex_b)).bit_count()
+
+
+# Hex string -> int memo. Keyed by the *string value*, so (unlike an id()-keyed
+# cache) it can never return another object's data. Converting once and using
+# int.bit_count() also removes the 64-iteration Python loop that made the cheap
+# prefilter nearly as expensive as the ZNCC it was meant to avoid.
+_HEX_INT_CACHE: dict[str, int] = {}
+
+
+def _hex_int(value: str) -> int:
+    cached = _HEX_INT_CACHE.get(value)
+    if cached is None:
+        cached = int(value, 16)
+        if len(_HEX_INT_CACHE) > 4096:  # bounded; hashes repeat heavily
+            _HEX_INT_CACHE.clear()
+        _HEX_INT_CACHE[value] = cached
+    return cached
 
 
 def _normalised_histogram(values: list[int], bins: int) -> list[float]:
@@ -135,6 +160,13 @@ class Thumb:
     values: list[float] = field(default_factory=list)
     mean: float = 0.0
     std: float = 0.0
+
+    # Memoised mean-centred / L2-normalised vector used by the numpy fast path.
+    # Deliberately stored *on the object* rather than in a global dict keyed by
+    # id(): ids are recycled after garbage collection, so an id-keyed cache can
+    # hand back another image's vector and silently produce a wrong similarity.
+    # Living here also means the entry dies with the object instead of leaking.
+    _vec: object = field(default=None, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         # Stored as zlib+base64 rather than a JSON list of numbers: a 64x64x3
@@ -192,7 +224,7 @@ def make_thumb(values: list[float], width: int, height: int) -> Thumb:
 def thumb_from_image(image: Image.Image, size: tuple[int, int] = THUMB_SIZE) -> Thumb:
     """Greyscale thumbnail for structure matching."""
     small = image.convert("L").resize(size, Image.LANCZOS)
-    return make_thumb([float(v) for v in small.getdata()], size[0], size[1])
+    return make_thumb([float(v) for v in pixel_values(small)], size[0], size[1])
 
 
 def thumb_rgb(image: Image.Image, size: tuple[int, int] = THUMB_SIZE) -> Thumb:
@@ -204,7 +236,7 @@ def thumb_rgb(image: Image.Image, size: tuple[int, int] = THUMB_SIZE) -> Thumb:
     small = image.convert("RGB").resize(size, Image.LANCZOS)
     red, green, blue = small.split()
     values: list[float] = []
-    for r, g, b in zip(red.getdata(), green.getdata(), blue.getdata()):
+    for r, g, b in zip(pixel_values(red), pixel_values(green), pixel_values(blue)):
         values.extend((float(r), float(g), float(b)))
     return make_thumb(values, size[0], size[1])
 
@@ -212,7 +244,7 @@ def thumb_rgb(image: Image.Image, size: tuple[int, int] = THUMB_SIZE) -> Thumb:
 def thumb_edges(image: Image.Image, size: tuple[int, int] = (48, 48)) -> Thumb:
     """Edge-magnitude thumbnail: where the text/UI detail sits."""
     edges = image.convert("L").resize(size, Image.LANCZOS).filter(ImageFilter.FIND_EDGES)
-    return make_thumb([float(v) for v in edges.getdata()], size[0], size[1])
+    return make_thumb([float(v) for v in pixel_values(edges)], size[0], size[1])
 
 
 try:  # numpy is on BeeWare's Android package list; the fallback keeps this
@@ -259,6 +291,20 @@ def intersection(h1: list[float], h2: list[float]) -> float:
     return sum(min(a, b) for a, b in zip(h1, h2))
 
 
+def multi_channel_intersection(h1: list[float], h2: list[float], channels: int) -> float:
+    """Intersection of a concatenated multi-channel histogram, normalised to [0, 1].
+
+    ``rgb_hist`` is three concatenated per-channel histograms, each summing to 1,
+    so a plain ``intersection`` returns up to 3.0 for identical images. That made
+    the ``rgb_hist`` weight three times larger than its configured value and let
+    ``similarity`` saturate at 1.0 - the weights in ``WEIGHTS`` did not mean what
+    they said. Dividing by the channel count restores [0, 1].
+    """
+    if channels <= 0:
+        return intersection(h1, h2)
+    return intersection(h1, h2) / channels
+
+
 # --------------------------------------------------------------------------
 # Feature extraction
 # --------------------------------------------------------------------------
@@ -268,7 +314,7 @@ def _prepare_vector(thumb: Thumb):
     """Return a mean-centred, L2-normalised numpy vector for a thumbnail.
 
     With both sides pre-normalised, ZNCC reduces to a single dot product, which
-    is what makes interactive recognition fast (a 96x96x3 comparison is 27648
+    is what makes the numpy path fast (a 64x64x3 comparison is 12288
     multiply-adds, done in C rather than in a Python loop).
     """
     if _np is None or not thumb.values or thumb.std < 1e-6:
@@ -281,23 +327,18 @@ def _prepare_vector(thumb: Thumb):
     return vector / norm
 
 
-# Cache keyed by object identity so repeated comparisons reuse the work.
-_VECTOR_CACHE: dict[tuple[int, str], object] = {}
+def _thumb_vector(thumb: Thumb):
+    """Memoised normalised vector for a thumbnail (see ``Thumb._vec``)."""
+    if thumb._vec is None:
+        thumb._vec = _prepare_vector(thumb)
+    return thumb._vec
 
 
-def _cached_vector(features_obj: "Features", key: str, thumb: Thumb):
-    cache_key = (id(features_obj), key)
-    if cache_key not in _VECTOR_CACHE:
-        _VECTOR_CACHE[cache_key] = _prepare_vector(thumb)
-    return _VECTOR_CACHE[cache_key]
-
-
-def _zncc_fast(features_a: "Features", features_b: "Features", key: str,
-               thumb_a: Thumb, thumb_b: Thumb) -> float:
+def _zncc_fast(thumb_a: Thumb, thumb_b: Thumb) -> float:
     """Dot-product ZNCC when numpy is available, exact scalar path otherwise."""
     if _np is not None:
-        va = _cached_vector(features_a, key, thumb_a)
-        vb = _cached_vector(features_b, key, thumb_b)
+        va = _thumb_vector(thumb_a)
+        vb = _thumb_vector(thumb_b)
         if va is None or vb is None or len(va) != len(vb):
             return 0.5
         correlation = float(_np.dot(va, vb))
@@ -368,9 +409,9 @@ def _edge_density(image: Image.Image) -> float:
     edges = image.convert("L").resize((128, 128), Image.LANCZOS).filter(
         ImageFilter.FIND_EDGES
     )
-    pixels = edges.getdata()
+    edge_values = pixel_values(edges)
     threshold = 40
-    strong = sum(1 for p in pixels if p > threshold)
+    strong = sum(1 for p in edge_values if p > threshold)
     return strong / (128 * 128)
 
 
@@ -381,20 +422,20 @@ def extract(image: Image.Image) -> Features:
 
     red, green, blue = small.split()
     rgb_hist = (
-        _normalised_histogram(list(red.getdata()), RGB_BINS)
-        + _normalised_histogram(list(green.getdata()), RGB_BINS)
-        + _normalised_histogram(list(blue.getdata()), RGB_BINS)
+        _normalised_histogram(pixel_values(red), RGB_BINS)
+        + _normalised_histogram(pixel_values(green), RGB_BINS)
+        + _normalised_histogram(pixel_values(blue), RGB_BINS)
     )
 
     hue = small.convert("HSV").split()[0]
-    hue_hist = _normalised_histogram(list(hue.getdata()), HUE_BINS)
+    hue_hist = _normalised_histogram(pixel_values(hue), HUE_BINS)
 
     grey = rgb.convert("L")
     grid_img = grey.resize((GRID, GRID), Image.BOX)
-    grid = [v / 255.0 for v in grid_img.getdata()]
+    grid = [v / 255.0 for v in pixel_values(grid_img)]
 
     grey_small = grey.resize(HIST_SIZE, Image.LANCZOS)
-    values = list(grey_small.getdata())
+    values = pixel_values(grey_small)
     mean = sum(values) / len(values)
     variance = sum((v - mean) ** 2 for v in values) / len(values)
 
@@ -430,8 +471,19 @@ def extract(image: Image.Image) -> Features:
 
 
 def extract_path(path: str | Path) -> Features:
-    """Extract features from an image file."""
+    """Extract features from an image file.
+
+    For JPEGs we ask the decoder for a reduced-size draft first. A 12 MP phone
+    photo otherwise costs ~1.8 s of full-resolution decode on the calling
+    thread - and in the GUI that thread is the one drawing the window, so the
+    app appears frozen. Features are computed at 128x128 at most, so the extra
+    detail is thrown away regardless.
+    """
     with Image.open(path) as handle:
+        try:
+            handle.draft("RGB", (512, 512))  # no-op for non-JPEG formats
+        except Exception:
+            pass
         handle.load()
         return extract(handle)
 
@@ -463,9 +515,10 @@ def _hash_similarity(a: str, b: str) -> float:
     """
     if not a or not b:
         return 0.5
-    if int(a, 16) == 0 or int(b, 16) == 0:
+    ia, ib = _hex_int(a), _hex_int(b)
+    if ia == 0 or ib == 0:
         return 0.5
-    distance = hamming(a, b)
+    distance = (ia ^ ib).bit_count()
     return max(0.0, 1.0 - distance / 64.0)
 
 
@@ -486,16 +539,32 @@ def similarity(a: Features, b: Features) -> float:
 
 
 def components(a: Features, b: Features) -> dict[str, float]:
-    """Per-component similarity, keyed by feature name."""
+    """Per-component similarity, keyed by feature name, each in [0, 1]."""
     return {
-        "thumb_rgb": _zncc_fast(a, b, "thumb_rgb", a.thumb_rgb, b.thumb_rgb),
-        "thumb_grey": _zncc_fast(a, b, "thumb_grey", a.thumb_grey, b.thumb_grey),
-        "thumb_edges": _zncc_fast(a, b, "thumb_edges", a.thumb_edges, b.thumb_edges),
+        "thumb_rgb": _zncc_fast(a.thumb_rgb, b.thumb_rgb),
+        "thumb_grey": _zncc_fast(a.thumb_grey, b.thumb_grey),
+        "thumb_edges": _zncc_fast(a.thumb_edges, b.thumb_edges),
         "dhash": _hash_similarity(a.dhash, b.dhash),
-        "rgb_hist": intersection(a.rgb_hist, b.rgb_hist),
+        "rgb_hist": multi_channel_intersection(a.rgb_hist, b.rgb_hist, RGB_CHANNELS),
         "hue_hist": intersection(a.hue_hist, b.hue_hist),
         "grid": _list_similarity(a.grid, b.grid),
     }
+
+
+def cheap_score(a: Features, b: Features) -> float:
+    """A cheap upper-bound-ish score used to prefilter candidates.
+
+    Uses only the 64-bit hashes and the small histograms - no per-pixel work -
+    so it can be run against every reference before paying for ZNCC on the few
+    that survive. This is what keeps recognition fast without numpy.
+    """
+    return (
+        _hash_similarity(a.dhash, b.dhash) * 0.45
+        + _hash_similarity(a.ahash, b.ahash) * 0.15
+        + multi_channel_intersection(a.rgb_hist, b.rgb_hist, RGB_CHANNELS) * 0.20
+        + intersection(a.hue_hist, b.hue_hist) * 0.10
+        + _list_similarity(a.grid, b.grid) * 0.10
+    )
 
 
 _COMPONENT_LABELS = {

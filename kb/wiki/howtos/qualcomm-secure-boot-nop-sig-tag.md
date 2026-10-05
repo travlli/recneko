@@ -39,7 +39,7 @@ Error: Authentication failed
 2. **换回官方包内的 programmer**。用与机型完全对应的官方 ROM，直接使用该 ROM 目录里自带的 firehose programmer；重新完整解压一次，并关闭杀软对 `.elf` 等文件的实时拦截，避免文件被截断或隔离。
 3. **排除文件被替换**。确认没有从其他 ROM/其他机型复制过 programmer，也没有被第三方工具改写过文件名；与官方包内原文件比对。
 4. **确认工具侧的认证路径**。部分平台需要 MiFlash 走授权刷机模式（登录具备刷机权限的账号）才能通过认证；QFIL 侧则必须使用与该机型签名匹配的 programmer，二者不能互相替代。
-5. **优先改走 fastboot**。如果设备还能进 fastboot，且 bootloader 已解锁，优先使用官方 fastboot 线刷包完成刷机，绕开 EDL 认证环节（解锁失败见 [[fastboot-unlock-failed]]）。
+5. **优先改走 fastboot**。如果设备还能进 fastboot，且 bootloader 已解锁，优先使用官方 fastboot 线刷包完成刷机，绕开 EDL 认证环节（解锁失败见 [[fastboot-unlock-token-verify-failed]]）。
 6. **走官方售后**。若确认是零售安全启动机型、手上没有可用的授权途径，交官方售后/授权维修点刷机是最可靠的路径。不要尝试用非官方「解锁/绕过」工具，风险高且通常无效。
 
 ## 验证

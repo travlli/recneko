@@ -24,10 +24,13 @@
 
 用法：
     python tools/make_icon.py
+    python tools/make_icon.py --source D:\\art\\new_art.png   # 换一张图
 """
 
 from __future__ import annotations
 
+import argparse
+import os
 from pathlib import Path
 
 from PIL import Image
@@ -35,44 +38,53 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = PROJECT_ROOT / "src" / "mirecovery" / "resources"
 
-# 用户提供的原图（会话附件，本机可读）。
-# 当前使用的是 Q 版（三头身）鲸鱼娘单张立绘；早期用过的成熟比例设定图也列出，
-# 便于需要时切回（把对应路径挪到最前即可）。
-SOURCE_CANDIDATES = [
-    # Q 版鲸鱼娘立绘（当前采用）
-    Path(
-        r"C:\Users\admin\.dsh\attachments\v1\objects\43"
-        r"\43c55cd42dc1a3d1a53f38d9e99bedcec16ab00c4d32380d7dff489d93000474"
-    ),
-    # 成熟比例三视图设定图（备用）
-    Path(
-        r"C:\Users\admin\.dsh\attachments\v1\objects\1d"
-        r"\1debce40cf05ef1b6ee1ec138595036d55667224cb1306e3f4d77de0e2b0b97e"
-    ),
-    OUT_DIR / "character_sheet.jpg",  # 已导入后的位置，便于重复运行
-    OUT_DIR / "character_sheet.png",
-]
-
 SHEET_NAME = "character_sheet.jpg"
 LEGACY_SHEET_NAMES = ("character_sheet.png",)
 ICON_NAME = "icon.png"
 
+# The artwork already lives in the repository, so a clean checkout can rebuild
+# the icons with no external input. An earlier revision hard-coded an absolute
+# path into one developer's attachment store, which meant the script failed for
+# anyone else (and silently did nothing until the PNG hashes were compared).
+DEFAULT_SOURCE = OUT_DIR / SHEET_NAME
 
-def find_source() -> Path:
-    for path in SOURCE_CANDIDATES:
+# Optional overrides, in priority order: --source, $RECNEKO_ART_SOURCE, default.
+ART_SOURCE_ENV = "RECNEKO_ART_SOURCE"
+
+
+def find_source(explicit: str | None = None) -> Path:
+    """Locate the source artwork."""
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit))
+    from_env = os.environ.get(ART_SOURCE_ENV)
+    if from_env:
+        candidates.append(Path(from_env))
+    candidates.append(DEFAULT_SOURCE)
+    for legacy in LEGACY_SHEET_NAMES:
+        candidates.append(OUT_DIR / legacy)
+
+    for path in candidates:
         if path.is_file():
             return path
+
     raise SystemExit(
-        "找不到原始设定图。请把图片放到：\n"
-        f"  {OUT_DIR / SHEET_NAME}\n"
-        "然后重新运行本脚本。"
+        "找不到角色原图。请把图片放到：\n"
+        f"  {DEFAULT_SOURCE}\n"
+        f"或用 --source <路径> / 环境变量 {ART_SOURCE_ENV} 指定。"
     )
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--source", default=None,
+                        help="角色原图路径（默认用仓库内的 resources/character_sheet.jpg）")
+    args = parser.parse_args(argv)
+
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    source = find_source()
+    source = find_source(args.source)
     sheet_path = OUT_DIR / SHEET_NAME
+    print(f"[make_icon] 原图: {source}")
 
     # 1) 原图入库：按原始编码转存，避免再压一次。
     if source.resolve() != sheet_path.resolve():

@@ -5,10 +5,18 @@
 #   briefcase create android   # 生成 Android 工程
 #   briefcase build android    # 构建
 #   briefcase package android  # 出 apk（需要 JDK 17，SDK/NDK 会自动下载）
-#   briefcase package windows  # 出 MSI（可选；单文件 exe 见 MiRecoveryHelper.spec）
+#   briefcase package windows  # 出 MSI（可选；单文件 exe 见 MiRecoveryHelper-tk.spec）
 #
 # 许可字段必须是 app 级（合并后校验）：license 为 SPDX 表达式，
 # license-files 指向许可文件。
+
+# ------------------------------------------------------------------ 测试
+# 运行： .venv\Scripts\python.exe -m pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tools"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning:mirecovery.*"]
 
 [tool.briefcase]
 project_name = "RecNeko"
